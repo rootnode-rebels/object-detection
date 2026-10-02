@@ -63,10 +63,11 @@ class YOLODetector:
     Lightweight, CPU-optimized YOLOv8 Object Detector.
     Runs entirely on standard Raspberry Pi 5 CPU without requiring an NPU or AI HAT.
     """
-    def __init__(self, model_path=None, conf_threshold=0.5, nms_threshold=0.45, input_size=(320, 320)):
+    def __init__(self, model_path=None, classes=None, conf_threshold=0.5, nms_threshold=0.45, input_size=(320, 320)):
         self.conf_threshold = conf_threshold
         self.nms_threshold = nms_threshold
         self.input_size = input_size  # (320, 320) yields ~15-20 FPS on Pi 5 CPU; (640, 640) for max accuracy
+        self.classes = classes if classes is not None else COCO_CLASSES
 
         if model_path is None or not os.path.exists(model_path):
             try:
@@ -147,7 +148,7 @@ class YOLODetector:
                 y2 = min(orig_h, y1 + box[3])
 
                 cid = class_ids[idx]
-                class_name = COCO_CLASSES[cid] if cid < len(COCO_CLASSES) else "object"
+                class_name = self.classes[cid] if cid < len(self.classes) else f"object_{cid}"
 
                 # Calculate spatial direction
                 center_x = (x1 + x2) / 2.0

@@ -189,8 +189,19 @@ def main():
     parser.add_argument("--resolution", type=int, default=320, choices=[320, 640],
                         help="YOLO input resolution: 320 for high FPS (~15-20 FPS on Pi 5), 640 for max accuracy")
     parser.add_argument("--headless", action="store_true", help="Run without graphical display window")
-    parser.add_argument("--conf", type=float, default=0.5, help="Confidence threshold (default: 0.5)")
+    parser.add_argument("--classes", type=str, default=None,
+                        help="Custom classes: comma-separated list or path to a text file containing class names")
     args = parser.parse_args()
+
+    # Parse custom classes if provided
+    custom_classes = None
+    if args.classes:
+        if os.path.exists(args.classes):
+            with open(args.classes, "r") as f:
+                custom_classes = [line.strip() for line in f if line.strip()]
+        else:
+            custom_classes = [c.strip() for c in args.classes.split(",") if c.strip()]
+        print(f"[INFO] Loaded {len(custom_classes)} custom classes: {custom_classes}")
 
     print("\n" + "=" * 65)
     print("  Raspberry Pi 5 Smart Vision Assistant (CPU-Optimized YOLOv8)")
@@ -200,6 +211,7 @@ def main():
     # Initialize CPU YOLOv8 Detector
     detector = YOLODetector(
         model_path=args.model,
+        classes=custom_classes,
         conf_threshold=args.conf,
         input_size=(args.resolution, args.resolution)
     )
