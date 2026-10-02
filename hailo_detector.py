@@ -136,6 +136,15 @@ class HailoYOLODetector:
         self.input_shape = (self.input_vstream_info.shape[1], self.input_vstream_info.shape[2])
         print(f"[INFO] Hailo-8 Model Input Shape: {self.input_shape}")
 
+        # Initialize persistent InferVStreams pipeline to sustain 60 FPS without buffer reallocations
+        self.input_params = InputVStreamParams.make(self.network_group, format_type=FormatType.UINT8)
+        self.output_params = OutputVStreamParams.make(self.network_group, format_type=FormatType.FLOAT32)
+        try:
+            self.infer_pipeline = InferVStreams(self.network_group, self.input_params, self.output_params)
+            self.infer_pipeline.__enter__()
+        except Exception:
+            self.infer_pipeline = None
+
     def _init_cpu_fallback(self):
         """Fallback lightweight detector when NPU is not physically present."""
         print("[INFO] Initializing CPU fallback detector...")
@@ -182,13 +191,17 @@ class HailoYOLODetector:
         # Ensure RGB input format
         input_data = np.expand_dims(cv2.cvtColor(resized, cv2.COLOR_BGR2RGB), axis=0).astype(np.uint8)
 
-        input_params = InputVStreamParams.make(self.network_group, format_type=FormatType.UINT8)
-        output_params = OutputVStreamParams.make(self.network_group, format_type=FormatType.FLOAT32)
-
         detections = []
-        with InferVStreams(self.network_group, input_params, output_params) as infer_pipeline:
-            input_name = self.input_vstream_info.name
-            raw_results = infer_pipeline.infer({input_name: input_data})
+        input_name = self.input_vstream_info.name
+
+        # Leverage persistent pipeline to maximize PCIe throughput and eliminate frame-rate jitter
+        if hasattr(self, 'infer_pipeline') and self.infer_pipeline is not None:
+            raw_results = self.infer_pipeline.infer({input_name: input_data})
+        else:
+            input_params = InputVStreamParams.make(self.network_group, format_type=FormatType.UINT8)
+            output_params = OutputVStreamParams.make(self.network_group, format_type=FormatType.FLOAT32)
+            with InferVStreams(self.network_group, input_params, output_params) as infer_pipeline:
+                raw_results = infer_pipeline.infer({input_name: input_data})
 
             # Parse Hailo YOLOv8 NMS output
             for out_name, out_tensor in raw_results.items():
@@ -271,7 +284,14 @@ class HailoYOLODetector:
         return detections
 
     def close(self):
-        """Releases Hailo VDevice handles."""
+        """Releases Hailo VDevice and pipeline handles."""
+        if hasattr(self, 'infer_pipeline') and self.infer_pipeline is not None:
+            try:
+                self.infer_pipeline.__exit__(None, None, None)
+            except Exception:
+                pass
+            self.infer_pipeline = None
+
         if self.vdevice is not None:
             try:
                 self.vdevice.release()
