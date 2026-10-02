@@ -1,0 +1,794 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Smart Vision Assistant - Interactive Hardware & AI Simulator</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #090d16;
+      --surface: #111827;
+      --surface-border: #1f2937;
+      --card-bg: rgba(17, 24, 39, 0.75);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --accent: #38bdf8;
+      --accent-glow: rgba(56, 189, 248, 0.25);
+      --success: #10b981;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --text: #f3f4f6;
+      --text-muted: #9ca3af;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Outfit', -apple-system, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      overflow-x: hidden;
+      background-image: 
+        radial-gradient(circle at 15% 15%, rgba(56, 189, 248, 0.08) 0%, transparent 40%),
+        radial-gradient(circle at 85% 85%, rgba(16, 185, 129, 0.06) 0%, transparent 40%);
+    }
+
+    /* Top Navigation */
+    header {
+      padding: 1.25rem 2rem;
+      border-bottom: 1px solid var(--card-border);
+      background: rgba(9, 13, 22, 0.85);
+      backdrop-filter: blur(12px);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .brand-icon {
+      width: 2.5rem;
+      height: 2.5rem;
+      background: linear-gradient(135deg, #0284c7, #38bdf8);
+      border-radius: 0.75rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 20px var(--accent-glow);
+    }
+
+    .brand h1 {
+      font-size: 1.25rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    .brand span {
+      font-size: 0.8rem;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-weight: 600;
+      display: block;
+    }
+
+    .header-badge {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: rgba(16, 185, 129, 0.15);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      color: var(--success);
+      padding: 0.4rem 0.85rem;
+      border-radius: 9999px;
+      font-size: 0.85rem;
+      font-weight: 500;
+    }
+
+    .pulse-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--success);
+      animation: pulse 1.5s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(1.3); }
+    }
+
+    /* Main Container */
+    main {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 2rem;
+      display: grid;
+      grid-template-columns: 1.8fr 1.2fr;
+      gap: 2rem;
+    }
+
+    @media (max-width: 1024px) {
+      main { grid-template-columns: 1fr; }
+    }
+
+    /* Card Panels */
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 1.25rem;
+      padding: 1.5rem;
+      backdrop-filter: blur(16px);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+    }
+
+    .card-title {
+      font-size: 1.1rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      padding-bottom: 0.75rem;
+    }
+
+    .card-title span {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      font-weight: 400;
+    }
+
+    /* Viewport Display */
+    .viewport-container {
+      position: relative;
+      width: 100%;
+      height: 420px;
+      background: #020617;
+      border-radius: 1rem;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #visionCanvas {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    #webcamVideo {
+      display: none;
+    }
+
+    /* HUD Overlay */
+    .hud-overlay {
+      position: absolute;
+      top: 1rem;
+      left: 1rem;
+      right: 1rem;
+      display: flex;
+      justify-content: space-between;
+      pointer-events: none;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem;
+    }
+
+    .hud-pill {
+      background: rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      padding: 0.4rem 0.75rem;
+      border-radius: 0.5rem;
+      color: #38bdf8;
+    }
+
+    .hud-alert {
+      position: absolute;
+      bottom: 1rem;
+      left: 1rem;
+      right: 1rem;
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid var(--accent);
+      border-radius: 0.75rem;
+      padding: 0.85rem 1.25rem;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      box-shadow: 0 4px 20px rgba(56, 189, 248, 0.2);
+      transition: all 0.3s ease;
+    }
+
+    .speaker-icon {
+      font-size: 1.5rem;
+      animation: bounce 1s infinite alternate;
+    }
+
+    @keyframes bounce {
+      from { transform: scale(1); }
+      to { transform: scale(1.15); }
+    }
+
+    .alert-text h4 {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: #38bdf8;
+    }
+
+    .alert-text p {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+
+    /* Scene Selector Buttons */
+    .scene-selector {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 0.5rem;
+    }
+
+    .scene-btn {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: var(--text);
+      padding: 0.6rem 0.5rem;
+      border-radius: 0.6rem;
+      font-size: 0.8rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+      text-align: center;
+    }
+
+    .scene-btn:hover {
+      background: rgba(56, 189, 248, 0.15);
+      border-color: var(--accent);
+    }
+
+    .scene-btn.active {
+      background: linear-gradient(135deg, rgba(2, 132, 199, 0.5), rgba(56, 189, 248, 0.3));
+      border-color: var(--accent);
+      color: #fff;
+    }
+
+    /* Hardware Controls */
+    .hardware-group {
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+    }
+
+    .sensor-box {
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 0.85rem;
+      padding: 1.25rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .sensor-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .sensor-title {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-weight: 600;
+      font-size: 0.95rem;
+    }
+
+    .sensor-value {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: #38bdf8;
+    }
+
+    .distance-slider {
+      width: 100%;
+      height: 8px;
+      border-radius: 4px;
+      background: #1e293b;
+      outline: none;
+      -webkit-appearance: none;
+      cursor: pointer;
+    }
+
+    .distance-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: var(--accent);
+      cursor: pointer;
+      box-shadow: 0 0 10px var(--accent);
+      transition: all 0.2s;
+    }
+
+    .distance-slider::-webkit-slider-thumb:hover {
+      transform: scale(1.2);
+    }
+
+    .slider-labels {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    /* 3D Push Button */
+    .button-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .tactile-btn {
+      width: 100%;
+      padding: 1.1rem;
+      background: linear-gradient(135deg, #2563eb, #0284c7);
+      border: none;
+      border-radius: 0.85rem;
+      color: white;
+      font-size: 1rem;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      cursor: pointer;
+      box-shadow: 0 6px 0 #1e40af, 0 10px 20px rgba(37, 99, 235, 0.4);
+      transition: all 0.1s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      text-transform: uppercase;
+    }
+
+    .tactile-btn:active, .tactile-btn.pressed {
+      transform: translateY(6px);
+      box-shadow: 0 0 0 #1e40af, 0 4px 10px rgba(37, 99, 235, 0.4);
+    }
+
+    /* Logs Terminal */
+    .log-terminal {
+      background: #050811;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 0.75rem;
+      height: 200px;
+      overflow-y: auto;
+      padding: 0.75rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.75rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+
+    .log-item {
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .log-time { color: #64748b; }
+    .log-trigger { color: #f59e0b; font-weight: 600; }
+    .log-speak { color: #10b981; }
+    .log-info { color: #38bdf8; }
+
+    /* Telemetry Grid */
+    .telemetry-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0.75rem;
+    }
+
+    .telem-card {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 0.6rem;
+      padding: 0.75rem;
+      text-align: center;
+    }
+
+    .telem-card span {
+      display: block;
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+    }
+
+    .telem-card h3 {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: var(--text);
+      margin-top: 0.2rem;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Header -->
+  <header>
+    <div class="brand">
+      <div class="brand-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path>
+        </svg>
+      </div>
+      <div>
+        <h1>Smart Vision Assistant Simulator</h1>
+        <span>Assistive Edge AI for Visually Impaired Persons</span>
+      </div>
+    </div>
+    <div class="header-badge">
+      <div class="pulse-dot"></div>
+      Simulation Running (Web Speech Active)
+    </div>
+  </header>
+
+  <!-- Main Grid -->
+  <main>
+    <!-- Left Column: Camera Viewport & Scene Controls -->
+    <div class="card">
+      <div class="card-title">
+        Live Camera Viewport & YOLOv8 HUD
+        <span>Decoupled 60 FPS Threaded Pipeline</span>
+      </div>
+
+      <!-- Canvas Viewport -->
+      <div class="viewport-container">
+        <canvas id="visionCanvas" width="640" height="420"></canvas>
+        <video id="webcamVideo" autoplay playsinline></video>
+
+        <!-- Top HUD -->
+        <div class="hud-overlay">
+          <div class="hud-pill" id="hudFps">FPS: 60.0</div>
+          <div class="hud-pill" id="hudDistance">Distance: 1.80m</div>
+          <div class="hud-pill" id="hudCpu">CPU: 12.4%</div>
+        </div>
+
+        <!-- Bottom Voice Alert -->
+        <div class="hud-alert" id="hudAlertBox">
+          <div class="speaker-icon">🔊</div>
+          <div class="alert-text">
+            <h4 id="alertHeadline">System Ready</h4>
+            <p id="alertSubline">Move distance slider under 1.0m or click Push Button.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Preset Scenes & Webcam Toggle -->
+      <div class="card-title">
+        Select Assistive Scene Environment
+        <span>Or switch to live laptop webcam</span>
+      </div>
+      <div class="scene-selector">
+        <button class="scene-btn active" onclick="switchScene('hallway')">🏢 Hallway / Door</button>
+        <button class="scene-btn" onclick="switchScene('stairs')">🪜 Staircase / Rail</button>
+        <button class="scene-btn" onclick="switchScene('street')">🚗 Street / Rickshaw</button>
+        <button class="scene-btn" onclick="toggleWebcam()">📹 Use Live Webcam</button>
+      </div>
+
+      <!-- Telemetry Stats -->
+      <div class="telemetry-grid">
+        <div class="telem-card">
+          <span>Target Architecture</span>
+          <h3 style="color:#38bdf8;">RPi 5 CPU</h3>
+        </div>
+        <div class="telem-card">
+          <span>YOLOv8 Latency</span>
+          <h3 id="telemLatency" style="color:#10b981;">18.5 ms</h3>
+        </div>
+        <div class="telem-card">
+          <span>Active Classes</span>
+          <h3 style="color:#f59e0b;">92 Custom</h3>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right Column: Hardware Sensors & Trigger Simulation -->
+    <div class="card">
+      <div class="card-title">
+        Virtual Hardware Sensors (GPIO Triggers)
+        <span>Simulate physical sensor interactions</span>
+      </div>
+
+      <div class="hardware-group">
+        <!-- Ultrasonic Sensor HC-SR04 -->
+        <div class="sensor-box">
+          <div class="sensor-header">
+            <div class="sensor-title">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"></path>
+                <path d="M2 12h20"></path>
+              </svg>
+              HC-SR04 Ultrasonic Distance (Pin 23/24)
+            </div>
+            <div class="sensor-value" id="distVal">1.80 m</div>
+          </div>
+          <input type="range" class="distance-slider" id="distSlider" min="0.2" max="3.0" step="0.05" value="1.8" oninput="onDistanceChange(this.value)">
+          <div class="slider-labels">
+            <span style="color:#ef4444; font-weight:600;">⚠ &lt; 1.0m (Auto Trigger)</span>
+            <span>2.0m</span>
+            <span>3.0m (Clear)</span>
+          </div>
+        </div>
+
+        <!-- Tactile Push Button -->
+        <div class="button-container">
+          <button class="tactile-btn" id="tactileBtn" onclick="triggerManualScan()">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z"/>
+            </svg>
+            Press Push Button (GPIO 17)
+          </button>
+          <span style="font-size:0.75rem; color:#64748b;">(Shortcut: Press Spacebar anywhere on keyboard)</span>
+        </div>
+
+        <!-- Terminal Logs -->
+        <div class="card-title">
+          Live System & Audio Logs
+          <span onclick="clearLogs()" style="cursor:pointer; color:#38bdf8;">Clear</span>
+        </div>
+        <div class="log-terminal" id="logTerminal">
+          <div class="log-item">
+            <span class="log-time">[00:00:00]</span>
+            <span class="log-info">[INIT]</span>
+            <span>System ready. Virtual HC-SR04 & Tactile Button initialized.</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    // State
+    let distance = 1.80;
+    let lastScanTime = 0;
+    const COOLDOWN = 3000;
+    let currentScene = 'hallway';
+    let isWebcam = false;
+    let webcamStream = null;
+
+    const canvas = document.getElementById('visionCanvas');
+    const ctx = canvas.getContext('2d');
+    const video = document.getElementById('webcamVideo');
+
+    // Preset Scene Objects & Layouts
+    const SCENES = {
+      hallway: {
+        background: '#0f172a',
+        objects: [
+          { class: 'door', box: [220, 40, 200, 320], conf: 0.92, color: '#38bdf8' },
+          { class: 'chair', box: [60, 240, 130, 150], conf: 0.88, color: '#10b981' },
+          { class: 'backpack', box: [440, 280, 100, 110], conf: 0.79, color: '#f59e0b' }
+        ]
+      },
+      stairs: {
+        background: '#131b2e',
+        objects: [
+          { class: 'staircase', box: [180, 100, 280, 270], conf: 0.94, color: '#ef4444' },
+          { class: 'handrail', box: [120, 80, 70, 280], conf: 0.85, color: '#38bdf8' },
+          { class: 'person', box: [450, 160, 90, 200], conf: 0.89, color: '#10b981' }
+        ]
+      },
+      street: {
+        background: '#090e1a',
+        objects: [
+          { class: 'auto-rickshaw', box: [190, 120, 260, 220], conf: 0.93, color: '#f59e0b' },
+          { class: 'pothole', box: [100, 310, 160, 80], conf: 0.84, color: '#ef4444' },
+          { class: 'pedestrian crossing', box: [80, 360, 480, 50], conf: 0.87, color: '#10b981' }
+        ]
+      }
+    };
+
+    // Render Viewport
+    function renderViewport() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      if (isWebcam && video.readyState === video.HAVE_ENOUGH_DATA) {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      } else {
+        // Draw scene mockup
+        const scene = SCENES[currentScene];
+        ctx.fillStyle = scene.background;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Perspective floor
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.03)';
+        ctx.beginPath();
+        ctx.moveTo(0, 380);
+        ctx.lineTo(640, 380);
+        ctx.lineTo(450, 180);
+        ctx.lineTo(190, 180);
+        ctx.closePath();
+        ctx.fill();
+
+        // Draw Simulated Objects
+        scene.objects.forEach(obj => {
+          const [x, y, w, h] = obj.box;
+
+          // Object Fill
+          ctx.fillStyle = obj.color + '22';
+          ctx.fillRect(x, y, w, h);
+
+          // Bounding Box
+          ctx.strokeStyle = obj.color;
+          ctx.lineWidth = 2;
+          ctx.strokeRect(x, y, w, h);
+
+          // Label Banner
+          ctx.fillStyle = obj.color;
+          ctx.fillRect(x, Math.max(0, y - 24), ctx.measureText(`${obj.class} ${Math.round(obj.conf * 100)}%`).width + 16, 24);
+
+          ctx.fillStyle = '#000';
+          ctx.font = 'bold 12px Outfit, sans-serif';
+          ctx.fillText(`${obj.class.toUpperCase()} ${Math.round(obj.conf * 100)}%`, x + 8, Math.max(16, y - 7));
+        });
+      }
+
+      requestAnimationFrame(renderViewport);
+    }
+    renderViewport();
+
+    // Distance Slider Handler
+    function onDistanceChange(val) {
+      distance = parseFloat(val);
+      document.getElementById('distVal').innerText = distance.toFixed(2) + ' m';
+      document.getElementById('hudDistance').innerText = 'Distance: ' + distance.toFixed(2) + 'm';
+
+      // Auto Trigger check (< 1.0m)
+      if (distance < 1.0) {
+        checkAndTrigger(`Proximity Alert (${distance.toFixed(2)}m)`);
+      }
+    }
+
+    // Manual Button Trigger
+    function triggerManualScan() {
+      const btn = document.getElementById('tactileBtn');
+      btn.classList.add('pressed');
+      setTimeout(() => btn.classList.remove('pressed'), 200);
+
+      checkAndTrigger("Button Pressed");
+    }
+
+    // Keyboard Spacebar trigger
+    window.addEventListener('keydown', (e) => {
+      if (e.code === 'Space') {
+        e.preventDefault();
+        triggerManualScan();
+      }
+    });
+
+    // Trigger Execution
+    function checkAndTrigger(reason) {
+      const now = Date.now();
+      if (now - lastScanTime < COOLDOWN) {
+        return; // In cooldown
+      }
+      lastScanTime = now;
+
+      logMessage('TRIGGER', `${reason}. Scanning environment...`);
+
+      // Find top object based on current scene
+      let topObject = null;
+      let direction = 'straight ahead';
+
+      if (!isWebcam) {
+        const scene = SCENES[currentScene];
+        topObject = scene.objects[0]; // Highest priority
+
+        const centerX = topObject.box[0] + topObject.box[2] / 2;
+        if (centerX < canvas.width * 0.35) {
+          direction = 'on your left';
+        } else if (centerX > canvas.width * 0.65) {
+          direction = 'on your right';
+        }
+      } else {
+        // Fallback for webcam demo
+        topObject = { class: 'person', conf: 0.91 };
+      }
+
+      let speechText = '';
+      if (topObject) {
+        speechText = `${topObject.class} detected ${direction} at ${distance.toFixed(1)} meters.`;
+      } else {
+        speechText = 'Obstacle ahead, cannot identify object.';
+      }
+
+      // Update HUD Alert
+      document.getElementById('alertHeadline').innerText = `🔊 ${topObject ? topObject.class.toUpperCase() : 'OBSTACLE'}`;
+      document.getElementById('alertSubline').innerText = speechText;
+
+      // Speak text via Web Speech API
+      speak(speechText);
+      logMessage('SPEAK', speechText);
+    }
+
+    // Web Speech API
+    function speak(text) {
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel(); // Stop prior speech
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.rate = 1.0;
+        utterance.pitch = 1.0;
+        window.speechSynthesis.speak(utterance);
+      }
+    }
+
+    // Log Terminal
+    function logMessage(tag, msg) {
+      const terminal = document.getElementById('logTerminal');
+      const timeStr = new Date().toTimeString().split(' ')[0];
+
+      const item = document.createElement('div');
+      item.className = 'log-item';
+      item.innerHTML = `
+        <span class="log-time">[${timeStr}]</span>
+        <span class="${tag === 'TRIGGER' ? 'log-trigger' : tag === 'SPEAK' ? 'log-speak' : 'log-info'}">[${tag}]</span>
+        <span>${msg}</span>
+      `;
+      terminal.appendChild(item);
+      terminal.scrollTop = terminal.scrollHeight;
+    }
+
+    function clearLogs() {
+      document.getElementById('logTerminal').innerHTML = '';
+    }
+
+    // Scene Switcher
+    function switchScene(sceneKey) {
+      if (isWebcam && webcamStream) {
+        webcamStream.getTracks().forEach(t => t.stop());
+        isWebcam = false;
+      }
+      currentScene = sceneKey;
+
+      document.querySelectorAll('.scene-btn').forEach(b => b.classList.remove('active'));
+      event.target.classList.add('active');
+
+      logMessage('INFO', `Switched environment to: ${sceneKey.toUpperCase()}`);
+    }
+
+    // Live Webcam
+    async function toggleWebcam() {
+      try {
+        if (!isWebcam) {
+          webcamStream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 420 } });
+          video.srcObject = webcamStream;
+          isWebcam = true;
+          document.querySelectorAll('.scene-btn').forEach(b => b.classList.remove('active'));
+          event.target.classList.add('active');
+          logMessage('INFO', 'Switched to Live Webcam stream.');
+        }
+      } catch (err) {
+        alert('Webcam permission denied or not available.');
+      }
+    }
+  </script>
+</body>
+</html>
