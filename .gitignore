@@ -32,6 +32,13 @@ model_files/
 *.caffemodel
 *.tmp
 
+# Portable python & temporary artifacts
+portable_python/
+*.zip
+get-pip.py
+weights/
+*.pt
+
 # IDEs & OS
 .vscode/
 .idea/

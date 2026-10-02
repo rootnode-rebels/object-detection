@@ -15,6 +15,9 @@ import subprocess
 import threading
 import argparse
 
+# Ensure current directory is in sys.path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 # CPU-Optimized YOLOv8 Detector
 from yolo_detector import YOLODetector, YOLO_ONNX_PATH
 

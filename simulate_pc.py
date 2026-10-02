@@ -26,6 +26,9 @@ import subprocess
 import argparse
 import numpy as np
 
+# Ensure current directory is in sys.path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 # Import YOLO detector
 try:
     from yolo_detector import YOLODetector, YOLO_ONNX_PATH, COCO_CLASSES
@@ -88,12 +91,21 @@ def main():
     parser.add_argument("--conf", type=float, default=0.45, help="Confidence threshold (default: 0.45)")
     args = parser.parse_args()
 
+    # Auto-detect assistive 92 model and classes
+    model_to_use = args.model
+    if model_to_use is None and os.path.exists("model_files/yolov8_assistive_92.onnx"):
+        model_to_use = "model_files/yolov8_assistive_92.onnx"
+
+    classes_file = args.classes
+    if (classes_file is None or not os.path.exists(classes_file)) and os.path.exists("classes.txt"):
+        classes_file = "classes.txt"
+
     # Load custom classes if available
     custom_classes = None
-    if args.classes and os.path.exists(args.classes):
-        with open(args.classes, "r") as f:
+    if classes_file and os.path.exists(classes_file):
+        with open(classes_file, "r") as f:
             custom_classes = [line.strip() for line in f if line.strip()]
-        print(f"[INFO] Loaded {len(custom_classes)} custom classes from {args.classes}")
+        print(f"[INFO] Loaded {len(custom_classes)} custom classes from {classes_file}")
 
     # Initialize Voice Engine
     voice = VoiceSynthesizer()
@@ -104,7 +116,7 @@ def main():
     if YOLO_AVAILABLE:
         try:
             detector = YOLODetector(
-                model_path=args.model,
+                model_path=model_to_use,
                 classes=custom_classes,
                 conf_threshold=args.conf,
                 input_size=(args.resolution, args.resolution)

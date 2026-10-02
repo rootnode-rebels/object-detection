@@ -194,50 +194,90 @@ flowchart TD
 
 ## ⚡ Installation & Quick Start
 
-### 1. Install System Dependencies
-On Raspberry Pi OS:
+### Option A: Local PC Simulation (Windows / Mac / Linux)
+You can test the entire pipeline on your PC with your webcam, simulated distance sensor, and native voice synthesis:
+
+1. **One-Click Run (Windows):**
+   Simply double-click `run_pc_demo.bat`.
+
+2. **Manual Command:**
+   ```bash
+   python simulate_pc.py --model model_files/yolov8_assistive_92.onnx --classes classes.txt --resolution 320
+   ```
+   *Controls during PC simulation:*
+   * `[SPACE]` : Press virtual hardware tactile button (triggers on-demand query)
+   * `[W]` / `[UP]` : Move closer to obstacle (decreases ultrasonic distance)
+   * `[S]` / `[DOWN]` : Move farther from obstacle (increases ultrasonic distance)
+   * `[A]` : Toggle Auto-walk radar oscillation mode
+   * `[Q]` / `[ESC]` : Exit simulation
+
+3. **Interactive Hardware Web Simulator:**
+   Open `simulation.html` in any web browser to interactively test the ultrasonic radar, push button, HUD, and voice synthesis in a GUI environment.
+
+---
+
+### Option B: Physical Raspberry Pi 5 Deployment
+
+#### 1. Install System Dependencies
+On Raspberry Pi OS (Bookworm):
 ```bash
 sudo apt update && sudo apt install python3-opencv python3-gpiozero python3-psutil python3-numpy espeak -y
 ```
 
-### 2. Install Python Packages
+#### 2. Install Python Packages
 ```bash
 pip install -r requirements.txt --break-system-packages
 ```
 
-### 3. Run the Smart Assistant
+#### 3. Run the Smart Assistant
 
-**Fast Mode (~15-20 FPS on Pi 5 CPU, default):**
+**Standard 92-Class Assistive Mode (~15-20 FPS on Pi 5 CPU):**
+```bash
+python3 smart_assistant.py --model model_files/yolov8_assistive_92.onnx --classes classes.txt --resolution 320
+```
+
+**COCO-80 Baseline Mode:**
 ```bash
 python3 smart_assistant.py --resolution 320
 ```
 
-**High-Accuracy Mode (640x640):**
-```bash
-python3 smart_assistant.py --resolution 640
-```
-
-**Headless Mode (for battery / wearable use):**
+**Headless Mode (for battery-powered wearable use):**
 ```bash
 python3 smart_assistant.py --headless
 ```
 
-### 4. Run Benchmark Tool
+#### 4. Run Benchmark Tool
 ```bash
 python3 benchmark_performance.py
 ```
 
 ---
 
+## 🎯 92 Supported Assistive Classes
+
+The custom-trained assistive model detects 92 essential indoor, outdoor, and hazard objects:
+
+* **Pedestrian & Navigation Hazards**: `staircase`, `door`, `pothole`, `manhole`, `speed breaker`, `pedestrian crossing`, `road barrier`, `road divider`, `traffic cone`, `drain`, `fence`, `gate`, `construction material`, `rock`, `stone`
+* **Vehicles & Street Mobility**: `person`, `auto-rickshaw`, `car`, `bus`, `truck`, `motorcycle`, `scooter`, `bicycle`, `street light`, `traffic light`, `fire hydrant`
+* **Indoor Furniture & Landmarks**: `chair`, `bench`, `table`, `desk`, `bed`, `sofa`, `cabinet`, `cupboard`, `shelf`, `switchboard`, `electrical socket`, `sink`, `toilet`
+* **Everyday Objects**: `water bottle`, `backpack`, `mobile phone`, `laptop`, `book`, `cup`, `glass`, `plate`, `bowl`, `spoon`, `fork`
+
+---
+
 ## 📁 Repository Structure
 
 ```text
-├── smart_assistant.py          # Main real-time assistant application & telemetry HUD
+├── run_pc_demo.bat             # 1-Click Windows PC demo launcher
+├── simulate_pc.py              # Native PC simulation & CV demo with speech
+├── simulation.html             # Interactive browser-based hardware simulator
+├── smart_assistant.py          # Main real-time Raspberry Pi 5 assistant & HUD
 ├── yolo_detector.py            # CPU-optimized YOLOv8 inference engine
+├── build_assistive_model.py    # Zero-shot CLIP encoder for custom classes
+├── classes.txt                 # List of 92 assistive object classes
 ├── benchmark_performance.py    # Performance & thermal benchmarking tool
-├── SETUP_GUIDE.md              # Raspberry Pi 5 setup documentation
+├── SETUP_GUIDE.md              # Raspberry Pi 5 hardware wiring & setup guide
 ├── requirements.txt            # Python dependencies
-├── README.md                   # Project documentation, wiring diagrams & workflow
+├── README.md                   # Project documentation & wiring diagrams
 └── .gitignore                  # Git ignore rules
 ```
 
@@ -245,3 +285,4 @@ python3 benchmark_performance.py
 
 ## 📄 License
 MIT License
+
