@@ -1,11 +1,10 @@
 """
-Hailo-8 AI HAT+ Smart Vision Assistant
-Runs on Raspberry Pi 5 with Hailo-8 / Hailo-8L Dedicated NPU.
-Full compliance with Edge AI Hardware Architecture Specification:
-- Real-time 60 FPS YOLOv8 Object Detection on NPU
-- Offloaded processing with <15% CPU utilization
-- Ultrasonic proximity alert & tactile button trigger
-- Non-blocking directional voice announcements
+Smart Vision & Obstacle Detection Assistant
+Runs on Raspberry Pi 5 (CPU-Optimized, No NPU Required).
+- Real-Time YOLOv8 Object Detection (80 COCO classes) via OpenCV DNN
+- Ultrasonic Proximity Alert (HC-SR04) & Tactile Button Trigger
+- Non-Blocking Spatial Voice Announcements (espeak)
+- Real-Time HUD with Live FPS, CPU Load %, and Distance
 """
 
 import cv2
@@ -16,8 +15,8 @@ import subprocess
 import threading
 import argparse
 
-# Hardware & Detector imports
-from hailo_detector import HailoYOLODetector, HEF_FILE_HAILO8
+# CPU-Optimized YOLOv8 Detector
+from yolo_detector import YOLODetector, YOLO_ONNX_PATH
 
 # Safe GPIO import for Raspberry Pi
 try:
@@ -27,7 +26,7 @@ except (ImportError, Exception) as e:
     GPIO_AVAILABLE = False
     DistanceSensor = None
     Button = None
-    print(f"[WARN] gpiozero not available ({e}). Hardware fallback enabled.")
+    print(f"[WARN] gpiozero not available ({e}). Running in simulation/desktop mode.")
 
 # Optional CPU / System Telemetry
 try:
@@ -87,7 +86,6 @@ def get_cpu_utilization():
             return psutil.cpu_percent(interval=None)
         except Exception:
             return 0.0
-    # Linux /proc/stat fallback if psutil is not installed
     try:
         with open("/proc/loadavg", "r") as f:
             load = float(f.read().split()[0])
@@ -134,14 +132,14 @@ def stop_tts():
 
 
 # ==========================================
-# 3. THREADED CAMERA STREAM (60 FPS CAPABLE)
+# 3. THREADED CAMERA STREAM (ZERO BUFFER LAG)
 # ==========================================
-class HighSpeedCameraStream:
+class ThreadedCameraStream:
     """
-    Threaded Camera Stream configured for high-throughput 60 FPS feeds.
-    Continuously flushes and provides the latest frame with zero buffer delay.
+    Continuously grabs frames in a background thread.
+    Fixes OpenCV buffer delay so read() always returns the immediate live frame.
     """
-    def __init__(self, src=0, target_fps=60, width=640, height=480):
+    def __init__(self, src=0, width=640, height=480):
         self.cap = cv2.VideoCapture(src)
         self.grabbed = False
         self.frame = None
@@ -149,10 +147,8 @@ class HighSpeedCameraStream:
         self.lock = threading.Lock()
 
         if self.cap.isOpened():
-            # Configure camera hardware properties for high frame rate
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-            self.cap.set(cv2.CAP_PROP_FPS, target_fps)
             self.grabbed, self.frame = self.cap.read()
             self.thread = threading.Thread(target=self._update, daemon=True)
             self.thread.start()
@@ -188,31 +184,36 @@ class HighSpeedCameraStream:
 # 4. MAIN APPLICATION
 # ==========================================
 def main():
-    parser = argparse.ArgumentParser(description="Raspberry Pi 5 + Hailo-8 AI Object Detection Assistant")
-    parser.add_argument("--hef", type=str, default=HEF_FILE_HAILO8, help="Path to Hailo-8 YOLOv8 HEF file")
+    parser = argparse.ArgumentParser(description="Raspberry Pi 5 CPU YOLOv8 Smart Vision Assistant")
+    parser.add_argument("--model", type=str, default=YOLO_ONNX_PATH, help="Path to YOLOv8 ONNX model")
+    parser.add_argument("--resolution", type=int, default=320, choices=[320, 640],
+                        help="YOLO input resolution: 320 for high FPS (~15-20 FPS on Pi 5), 640 for max accuracy")
     parser.add_argument("--headless", action="store_true", help="Run without graphical display window")
-    parser.add_argument("--fps", type=int, default=60, help="Target camera FPS (default: 60)")
+    parser.add_argument("--conf", type=float, default=0.5, help="Confidence threshold (default: 0.5)")
     args = parser.parse_args()
 
     print("\n" + "=" * 65)
-    print("  Raspberry Pi 5 + Hailo-8 AI HAT+ Edge Vision System")
-    print("  Target Architecture: Dedicated NPU (60 FPS, <15% CPU load)")
+    print("  Raspberry Pi 5 Smart Vision Assistant (CPU-Optimized YOLOv8)")
+    print(f"  Configuration: Resolution {args.resolution}x{args.resolution} | Confidence {args.conf}")
     print("=" * 65 + "\n")
 
-    # Initialize Hailo-8 NPU Detector
-    print("[INFO] Initializing Hailo-8 YOLOv8 Detector...")
-    detector = HailoYOLODetector(hef_path=args.hef, conf_threshold=0.5)
+    # Initialize CPU YOLOv8 Detector
+    detector = YOLODetector(
+        model_path=args.model,
+        conf_threshold=args.conf,
+        input_size=(args.resolution, args.resolution)
+    )
 
-    # Initialize High-Speed Camera
-    print("[INFO] Starting High-Speed Camera Stream...")
-    cam = HighSpeedCameraStream(src=0, target_fps=args.fps)
+    # Initialize Camera
+    print("[INFO] Starting Threaded Camera Stream...")
+    cam = ThreadedCameraStream(src=0, width=640, height=480)
     time.sleep(1.5)  # Warmup
 
     if not cam.is_opened():
         print("[ERROR] Failed to open camera device. Please verify camera connection.")
         sys.exit(1)
 
-    speak("Hailo AI system ready.")
+    speak("AI vision system ready.")
 
     last_scan_time = 0.0
     COOLDOWN = 3.0  # Cooldown between voice alerts
@@ -222,7 +223,6 @@ def main():
 
     try:
         while True:
-            loop_start = time.time()
             ret, frame = cam.read()
             if not ret or frame is None:
                 time.sleep(0.005)
@@ -235,14 +235,14 @@ def main():
                 frame_count = 0
                 fps_start_time = time.time()
 
-            # Continuous real-time detection on Hailo-8 NPU
+            # Run YOLOv8 detection on CPU
             detections = detector.detect(frame)
 
             # Read proximity sensors
             distance_meters = get_distance()
             button_pressed = is_button_pressed()
 
-            # Trigger condition: Obstacle < 1m OR Button pressed (and cooldown elapsed)
+            # Trigger condition: Obstacle < 1m OR Button pressed
             time_since_last_alert = time.time() - last_scan_time
             if (distance_meters < 1.0 or button_pressed) and (time_since_last_alert > COOLDOWN):
                 trigger_reason = "Button Pressed" if button_pressed else f"Proximity Alert ({distance_meters:.2f}m)"
@@ -263,10 +263,9 @@ def main():
 
                 last_scan_time = time.time()
 
-            # Telemetry display & visual feedback
+            # Graphical Telemetry Display
             if not args.headless:
                 cpu_load = get_cpu_utilization()
-                h, w = frame.shape[:2]
 
                 # Draw bounding boxes
                 for det in detections:
@@ -277,16 +276,14 @@ def main():
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
                 # Draw Telemetry HUD
-                accel_text = "Hailo-8 NPU [ACTIVE 60FPS]" if detector.is_npu_active else "CPU ONLY [BOTTLENECK]"
-                accel_color = (0, 255, 0) if detector.is_npu_active else (0, 0, 255)
+                cv2.putText(frame, f"Mode: CPU YOLOv8 ({args.resolution}x{args.resolution})",
+                            (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                cv2.putText(frame, f"FPS: {current_fps:.1f} | CPU: {cpu_load:.1f}%",
+                            (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                cv2.putText(frame, f"Distance: {distance_meters:.2f}m",
+                            (10, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
 
-                cv2.putText(frame, f"Accel: {accel_text}", (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, accel_color, 2)
-                cv2.putText(frame, f"FPS: {current_fps:.1f} | CPU: {cpu_load:.1f}%", (10, 50),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-                cv2.putText(frame, f"Distance: {distance_meters:.2f}m", (10, 75),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-
-                cv2.imshow("Hailo-8 AI Object Detection", frame)
+                cv2.imshow("Raspberry Pi 5 Object Detection", frame)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
 

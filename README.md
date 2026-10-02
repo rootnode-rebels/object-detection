@@ -1,44 +1,46 @@
 # Real-Time Edge AI Object Detection & Assistive Vision
 
-An ultra-low-latency, real-time object detection and smart vision assistant engineered for **Raspberry Pi 5** paired with the **Raspberry Pi AI HAT+ (Hailo-8 / Hailo-8L Dedicated NPU)**.
+A real-time object detection and smart vision assistant engineered for **Raspberry Pi 5** using a CPU-optimized **YOLOv8** architecture (no dedicated NPU or AI HAT required).
 
 ---
 
 ## 🚀 Key Features
 
-* **Hailo-8 NPU Hardware Acceleration**: Offloads complex YOLOv8 deep learning matrix multiplications to the dedicated 26 TOPS / 13 TOPS NPU via PCIe Gen 3.
-* **60 FPS Real-Time Performance**: Processes full-rate camera streams without the frame drops or latency spikes typical of CPU-only execution.
-* **Low CPU Utilization (<15%)**: Keeps the Raspberry Pi 5 Broadcom CPU free for networking, sensor polling, and audio, preventing thermal throttling (stays well below 85°C).
-* **80 COCO Classes with Spatial Awareness**: Detects everyday objects and calculates their spatial orientation (*"on your left"*, *"straight ahead"*, *"on your right"*).
+* **CPU-Optimized YOLOv8 Inference**: Runs lightweight YOLOv8n ONNX via OpenCV DNN with ARM NEON acceleration, achieving ~15-20 FPS directly on the Raspberry Pi 5 CPU.
+* **80 COCO Classes with Spatial Awareness**: Detects everyday objects and calculates their spatial position (*"on your left"*, *"straight ahead"*, *"on your right"*).
+* **Buffer-Free High-Speed Video Pipeline**: Threaded camera stream eliminates OpenCV internal frame buffer delay, guaranteeing zero-latency live vision analysis.
 * **Proximity & Manual Triggers**:
   * HC-SR04 ultrasonic sensor continuously monitors for obstacles closer than 1.0 meter.
-  * Tactile push button enables on-demand voice queries.
-* **Non-Blocking Text-to-Speech**: Integrated `espeak` engine provides instant spoken audio alerts without interrupting the video stream.
-* **Hardware Benchmark Tool**: Built-in script to measure FPS, per-frame latency, CPU load %, and SoC temperature.
+  * Tactile push button enables instant on-demand voice queries.
+* **Non-Blocking Text-to-Speech**: Integrated `espeak` engine speaks directional audio alerts asynchronously without freezing the video stream.
+* **Real-Time Telemetry HUD**: Live onscreen overlay displaying current FPS, CPU load %, distance reading, and object bounding boxes.
+* **Hardware Benchmark Tool**: Built-in benchmarking script to measure frame rates, latencies, CPU load, and SoC temperatures.
 
 ---
 
-## 📊 Architecture Specification
+## 📊 System Specifications
 
-| Metric | With Hailo-8 AI HAT+ (Dedicated NPU) | CPU-Only Baseline |
-|---|---|---|
-| **Frame Rate** | **60 FPS (Flawless, Real-Time)** | ~3 FPS (Choppy slideshow) |
-| **CPU Utilization** | **< 15% (Pi runs cool)** | ~100% (Severe strain) |
-| **Thermal State** | Stable, cool | Severe thermal throttling (85°C+) |
-| **Model** | YOLOv8n / YOLOv8s (80 COCO classes) | Obsolete MobileNet-SSD |
+| Component | Specification |
+|---|---|
+| **Host System** | Raspberry Pi 5 (Quad-core ARM Cortex-A76 @ 2.4 GHz) |
+| **Deep Learning Model** | YOLOv8n ONNX (80 COCO object classes) |
+| **Inference Engine** | OpenCV DNN (CPU Backend with ARM NEON SIMD) |
+| **Resolution Modes** | `320x320` (~15-20 FPS fast mode) / `640x640` (high accuracy mode) |
+| **Proximity Sensor** | HC-SR04 Ultrasonic Distance Sensor |
+| **Manual Trigger** | Push button with internal pull-up |
+| **Audio Feedback** | `espeak` Text-to-Speech Engine |
 
 ---
 
 ## 🔌 Hardware Connections & Wiring Graph
 
-The system pairs the Raspberry Pi 5 with the Hailo-8 AI HAT+ via the high-speed PCIe connector, while integrating the HC-SR04 ultrasonic sensor, tactile push button, camera, and speaker via the 40-pin GPIO header and peripheral buses.
+The setup connects the HC-SR04 ultrasonic sensor, tactile push button, camera, and speaker directly to the Raspberry Pi 5.
 
 ### Hardware Connection Graph
 
 ```mermaid
 graph TD
     subgraph Raspberry_Pi_5 ["Raspberry Pi 5 Host"]
-        PCIE["PCIe FFC Connector"]
         CSI["MIPI CSI / USB Port"]
         AUDIO_OUT["3.5mm Jack / USB Audio"]
         
@@ -51,10 +53,6 @@ graph TD
         end
     end
 
-    subgraph AI_HAT ["Raspberry Pi AI HAT+"]
-        NPU["Hailo-8 / Hailo-8L NPU (26/13 TOPS)"]
-    end
-
     subgraph Ultrasonic_Sensor ["HC-SR04 Ultrasonic Distance Sensor"]
         US_VCC["VCC (5V)"]
         US_GND["GND"]
@@ -62,23 +60,20 @@ graph TD
         US_ECHO["ECHO (5V Output)"]
     end
 
-    subgraph Voltage_Divider ["Voltage Divider / Level Converter"]
+    subgraph Voltage_Divider ["Voltage Divider (3.3V Logic Protection)"]
         R1["Resistor R1: 1kΩ"]
         R2["Resistor R2: 2kΩ"]
         DIV_NODE["3.3V Safe Tap Node"]
     end
 
-    subgraph Input_Output ["Peripherals & Feedback"]
+    subgraph Peripherals ["Peripherals & Feedback"]
         BTN["Tactile Push Button"]
         CAM["Pi Camera Module 3 / USB Cam"]
         SPK["Speaker / Headphones"]
     end
 
-    %% PCIe Link
-    PCIE <-->|"PCIe Gen 3 FFC Ribbon (High-Bandwidth)"| NPU
-
     %% Camera Link
-    CAM -->|"Raw Video Stream (60 FPS)"| CSI
+    CAM -->|"Raw Video Stream"| CSI
 
     %% Audio Link
     AUDIO_OUT -->|"Audio Output"| SPK
@@ -100,21 +95,19 @@ graph TD
     BTN --- PIN6
 
     classDef rpi fill:#c51a4a,stroke:#800020,stroke-width:2px,color:#fff;
-    classDef hailo fill:#00a3e0,stroke:#005a80,stroke-width:2px,color:#fff;
     classDef sensor fill:#2e7d32,stroke:#1b5e20,stroke-width:2px,color:#fff;
     classDef divider fill:#f57c00,stroke:#b26a00,stroke-width:2px,color:#fff;
     classDef io fill:#5e35b1,stroke:#311b92,stroke-width:2px,color:#fff;
 
     class Raspberry_Pi_5,GPIO_Header rpi;
-    class AI_HAT,NPU hailo;
     class Ultrasonic_Sensor sensor;
     class Voltage_Divider divider;
-    class Input_Output,BTN,CAM,SPK io;
+    class Peripherals,BTN,CAM,SPK io;
 ```
 
 ---
 
-### Detailed Pinout & Wiring Table
+### Pinout & Wiring Table
 
 | Raspberry Pi 5 Pin | Header Label | Connects To | Wire / Role | Notes |
 |---|---|---|---|---|
@@ -123,16 +116,15 @@ graph TD
 | **Pin 16** | `GPIO 23` | HC-SR04 `TRIG` | Signal (Yellow/Orange) | Sends $10\mu\text{s}$ ultrasonic pulse |
 | **Pin 18** | `GPIO 24` | Center node of Voltage Divider ($1\text{k}\Omega / 2\text{k}\Omega$) | Signal (Green) | Stepped-down 3.3V safe Echo input |
 | **Pin 11** | `GPIO 17` | Push Button Terminal 1 | Signal (Blue) | Internal pull-up enabled in software |
-| **PCIe FFC** | `PCIe 1-lane` | Raspberry Pi AI HAT+ | 16-pin Ribbon | High-speed PCIe Gen 3 bus to Hailo-8 |
-| **CSI / USB** | `CAM / USB 3.0`| Camera Module 3 or USB 60 FPS Webcam | Video In | Up to 60 FPS video capture |
-| **3.5mm / USB**| `Audio Jack` | Mini Speaker / Amplified 3.5mm Speaker | Audio Out | Spoken voice alerts via `espeak` |
+| **CSI / USB** | `CAM / USB 3.0`| Camera Module 3 or USB Webcam | Video In | Live camera stream |
+| **3.5mm / USB**| `Audio Jack` | Mini Speaker / Amplified Speaker | Audio Out | Spoken voice alerts via `espeak` |
 
 > [!CAUTION]
 > **Protecting Raspberry Pi 5 3.3V GPIO Pins**:
 > The HC-SR04 sensor outputs a **5V pulse** on its `ECHO` pin. Connecting this directly to the Pi's GPIO 24 can damage the processor's GPIO bank.
-> Always use a **voltage divider** or level converter:
+> Always use a **voltage divider**:
 >
-> $$V_{\text{out}} = V_{\text{in}} \times \left(\frac{R_2}{R_1 + R_2}\right) = 5\text{V} \times \left(\frac{2000\,\Omega}{1000\,\Omega + 2000\,\Omega}\right) = 3.33\text{V}$$
+> $$V_{\text{out}} = 5\text{V} \times \left(\frac{2000\,\Omega}{1000\,\Omega + 2000\,\Omega}\right) = 3.33\text{V}$$
 >
 > * Connect `ECHO` $\rightarrow$ $1\text{k}\Omega$ resistor ($R_1$).
 > * Connect the other end of $R_1$ to `GPIO 24` and to a $2\text{k}\Omega$ resistor ($R_2$).
@@ -142,22 +134,19 @@ graph TD
 
 ## 🔄 End-to-End System Workflow
 
-The architecture decouples the camera stream, hardware sensor polling, deep learning inference, and audio output into dedicated, non-blocking pathways.
-
 ```mermaid
 flowchart TD
     subgraph Initialization ["1. System Boot & Initialization"]
-        INIT_START(["System Start"]) --> PCIE_INIT["Initialize PCIe Gen 3 Link"]
-        PCIE_INIT --> HAILO_INIT["Configure HailoRT VDevice & Load YOLOv8 HEF"]
-        HAILO_INIT --> CAM_INIT["Start HighSpeedCameraStream Background Thread"]
+        INIT_START(["System Start"]) --> YOLO_INIT["Download & Load YOLOv8n ONNX Model"]
+        YOLO_INIT --> CAM_INIT["Start ThreadedCameraStream Background Thread"]
         CAM_INIT --> GPIO_INIT["Initialize GPIO: DistanceSensor & Button"]
-        GPIO_INIT --> READY_VOICE["Speak: System Ready"]
+        GPIO_INIT --> READY_VOICE["Speak: AI vision system ready"]
     end
 
-    subgraph Streaming ["2. Continuous 60 FPS Video Pipeline"]
+    subgraph Streaming ["2. Continuous Video Pipeline"]
         CAM_INIT -.-> CAM_LOOP["Threaded Camera Capture Loop"]
-        CAM_LOOP -->|"Read Frame @ 60 FPS"| BUFFER["Thread-Safe Frame Buffer"]
-        BUFFER -.->|"Latest Live Frame"| NPU_INFER
+        CAM_LOOP -->|"Read Live Frame"| BUFFER["Thread-Safe Frame Buffer"]
+        BUFFER -.->|"Latest Live Frame"| CPU_INFER
     end
 
     subgraph Polling ["3. Sensor Polling Loop (Every 100ms)"]
@@ -168,11 +157,11 @@ flowchart TD
 
     TRIGGER_CHECK -- No --> LOOP_START
 
-    subgraph AI_Inference ["4. Hailo-8 NPU Object Detection"]
+    subgraph AI_Inference ["4. CPU YOLOv8 Object Detection"]
         TRIGGER_CHECK -- Yes --> GRAB_FRAME["Fetch Freshest Frame from Buffer"]
-        GRAB_FRAME --> RESIZE["Resize to 640x640 RGB"]
-        RESIZE --> NPU_INFER["Offload to Hailo-8 NPU via InferVStreams"]
-        NPU_INFER --> NMS["Hailo On-Chip NMS & Class Parsing"]
+        GRAB_FRAME --> RESIZE["Normalize Blob to 320x320 or 640x640"]
+        RESIZE --> CPU_INFER["Run OpenCV DNN Forward Pass on CPU"]
+        CPU_INFER --> NMS["Vectorized NMS Candidate Extraction"]
         NMS --> FILTER_CONF{"Any Detection over 50% Confidence?"}
     end
 
@@ -186,82 +175,52 @@ flowchart TD
 
     subgraph Telemetry ["6. Real-Time HUD Overlay & Display"]
         SPEAK_ASYNC --> OVERLAY["Render Bounding Boxes + Direction Labels"]
-        OVERLAY --> HUD["Display Live FPS, CPU Load %, and NPU Status"]
+        OVERLAY --> HUD["Display Live FPS, CPU Load %, and Distance"]
         HUD --> RESET_TIMER["Reset 3.0s Cooldown Timer"]
         RESET_TIMER --> LOOP_START
     end
 
     subgraph Teardown ["7. Safe Shutdown"]
         LOOP_START -.->|"SIGINT / Ctrl+C"| CLEANUP["Release Camera Stream"]
-        CLEANUP --> CLOSE_HAILO["Close Hailo VDevice"]
-        CLOSE_HAILO --> CLOSE_GPIO["Close GPIO Handles & Terminate TTS"]
+        CLEANUP --> CLOSE_NET["Release DNN Model"]
+        CLOSE_NET --> CLOSE_GPIO["Close GPIO Handles & Terminate TTS"]
         CLOSE_GPIO --> EXIT(["System Safely Halted"])
     end
-
-    classDef init fill:#1565c0,stroke:#0d47a1,stroke-width:2px,color:#fff;
-    classDef stream fill:#00838f,stroke:#006064,stroke-width:2px,color:#fff;
-    classDef poll fill:#ef6c00,stroke:#e65100,stroke-width:2px,color:#fff;
-    classDef ai fill:#2e7d32,stroke:#1b5e20,stroke-width:2px,color:#fff;
-    classDef voice fill:#6a1b9a,stroke:#4a148c,stroke-width:2px,color:#fff;
-    classDef tele fill:#37474f,stroke:#263238,stroke-width:2px,color:#fff;
-    classDef stop fill:#c62828,stroke:#b71c1c,stroke-width:2px,color:#fff;
-
-    class Initialization,INIT_START,PCIE_INIT,HAILO_INIT,CAM_INIT,GPIO_INIT,READY_VOICE init;
-    class Streaming,CAM_LOOP,BUFFER stream;
-    class Polling,LOOP_START,READ_SENSORS,TRIGGER_CHECK poll;
-    class AI_Inference,GRAB_FRAME,RESIZE,NPU_INFER,NMS,FILTER_CONF ai;
-    class Audio_Feedback,CALC_DIR,FORMAT_ALERT,FORMAT_GENERIC,SPEAK_ASYNC voice;
-    class Telemetry,OVERLAY,HUD,RESET_TIMER tele;
-    class Teardown,CLEANUP,CLOSE_HAILO,CLOSE_GPIO,EXIT stop;
 ```
 
 ---
 
 ## ⚡ Installation & Quick Start
 
-### 1. Enable PCIe Gen 3 on Raspberry Pi 5
-Edit your Pi's boot configuration:
+### 1. Install System Dependencies
+On Raspberry Pi OS:
 ```bash
-sudo nano /boot/firmware/config.txt
-```
-Append to the end of the file:
-```ini
-dtparam=pciex1
-dtparam=pciex1_gen=3
-```
-Reboot the Pi:
-```bash
-sudo reboot
+sudo apt update && sudo apt install python3-opencv python3-gpiozero python3-psutil python3-numpy espeak -y
 ```
 
-### 2. Install System Drivers & Dependencies
-```bash
-sudo apt update && sudo apt install hailo-all python3-opencv python3-gpiozero python3-psutil espeak -y
-```
-
-Verify that the NPU is active:
-```bash
-hailortcli fw-control identify
-```
-
-### 3. Install Python Dependencies
+### 2. Install Python Packages
 ```bash
 pip install -r requirements.txt --break-system-packages
 ```
 
-### 4. Run the System
+### 3. Run the Smart Assistant
 
-**Launch the Assistant (with live HUD):**
+**Fast Mode (~15-20 FPS on Pi 5 CPU, default):**
 ```bash
-python3 smart_assistant.py
+python3 smart_assistant.py --resolution 320
 ```
 
-**Launch in Headless Mode (for battery / portable use):**
+**High-Accuracy Mode (640x640):**
+```bash
+python3 smart_assistant.py --resolution 640
+```
+
+**Headless Mode (for battery / wearable use):**
 ```bash
 python3 smart_assistant.py --headless
 ```
 
-**Run Performance Benchmark:**
+### 4. Run Benchmark Tool
 ```bash
 python3 benchmark_performance.py
 ```
@@ -272,9 +231,9 @@ python3 benchmark_performance.py
 
 ```text
 ├── smart_assistant.py          # Main real-time assistant application & telemetry HUD
-├── hailo_detector.py           # Hailo-8 NPU YOLOv8 inference engine with CPU fallback
+├── yolo_detector.py            # CPU-optimized YOLOv8 inference engine
 ├── benchmark_performance.py    # Performance & thermal benchmarking tool
-├── HAILO_SETUP_GUIDE.md        # Comprehensive Raspberry Pi 5 setup documentation
+├── SETUP_GUIDE.md              # Raspberry Pi 5 setup documentation
 ├── requirements.txt            # Python dependencies
 ├── README.md                   # Project documentation, wiring diagrams & workflow
 └── .gitignore                  # Git ignore rules
