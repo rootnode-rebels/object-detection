@@ -150,20 +150,26 @@ class YOLODetector:
                 cid = class_ids[idx]
                 class_name = self.classes[cid] if cid < len(self.classes) else f"object_{cid}"
 
-                # Calculate spatial direction
+                # Calculate spatial direction (Left, Middle, Right)
                 center_x = (x1 + x2) / 2.0
                 if center_x < orig_w * 0.35:
                     direction = "on your left"
+                    zone = "left"
                 elif center_x > orig_w * 0.65:
                     direction = "on your right"
+                    zone = "right"
                 else:
-                    direction = "straight ahead"
+                    direction = "in the middle"
+                    zone = "middle"
 
                 detections.append({
                     "class": class_name,
                     "confidence": float(confidences[idx]),
                     "box": [x1, y1, x2, y2],
-                    "direction": direction
+                    "direction": direction,
+                    "zone": zone,
+                    "center_x": center_x,
+                    "center_y": (y1 + y2) / 2.0
                 })
 
         detections.sort(key=lambda d: d["confidence"], reverse=True)
@@ -172,6 +178,70 @@ class YOLODetector:
     def close(self):
         """Release resources."""
         self.net = None
+
+
+def format_spatial_announcement(detections, distance_meters=None, target_zone=None):
+    """
+    Constructs natural, comprehensive spatial voice feedback (Left, Middle, Right)
+    for visually impaired navigation.
+    
+    :param detections: List of detection dictionaries from YOLODetector.detect()
+    :param distance_meters: Optional ultrasonic distance reading in meters
+    :param target_zone: Optional filter ('left', 'middle', 'right') for targeted sector queries
+    """
+    if not detections:
+        if distance_meters is not None and distance_meters < 1.0:
+            return f"Obstacle in the middle at {distance_meters:.1f} meters. Please stop or step aside."
+        return "Path clear ahead. No obstacles detected."
+
+    # Group unique object labels by zone
+    zones = {"middle": [], "left": [], "right": []}
+    for d in detections:
+        z = d.get("zone", "middle")
+        if z in zones and d["class"] not in [item["class"] for item in zones[z]]:
+            zones[z].append(d)
+
+    # 1. Targeted single-sector query (e.g. user pressed [L], [M], or [R])
+    if target_zone:
+        items = zones.get(target_zone, [])
+        label = "in the middle" if target_zone == "middle" else f"on your {target_zone}"
+        if not items:
+            return f"No objects detected {label}."
+        names = " and ".join([it["class"] for it in items[:2]])
+        if distance_meters is not None and distance_meters <= 3.0:
+            return f"{names.capitalize()} detected {label} at {distance_meters:.1f} meters."
+        return f"{names.capitalize()} detected {label}."
+
+    # 2. Comprehensive multi-zone spatial announcement
+    phrases = []
+
+    # Priority 1: Middle / Center (Direct walking path of the user)
+    if zones["middle"]:
+        m_names = " and ".join([it["class"] for it in zones["middle"][:2]])
+        if distance_meters is not None and distance_meters <= 3.0:
+            phrases.append(f"In the middle: {m_names} at {distance_meters:.1f} meters")
+        else:
+            phrases.append(f"In the middle: {m_names}")
+    elif distance_meters is not None and distance_meters < 1.0:
+        phrases.append(f"Obstacle in the middle at {distance_meters:.1f} meters")
+
+    # Priority 2: Left sector
+    if zones["left"]:
+        l_names = " and ".join([it["class"] for it in zones["left"][:2]])
+        phrases.append(f"On your left: {l_names}")
+
+    # Priority 3: Right sector
+    if zones["right"]:
+        r_names = " and ".join([it["class"] for it in zones["right"][:2]])
+        phrases.append(f"On your right: {r_names}")
+
+    if phrases:
+        return ". ".join(phrases) + "."
+
+    if distance_meters is not None and distance_meters < 1.0:
+        return f"Warning: obstacle detected at {distance_meters:.1f} meters."
+
+    return "Path clear ahead."
 
 
 if __name__ == "__main__":

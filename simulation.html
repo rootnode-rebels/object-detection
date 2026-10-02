@@ -544,9 +544,21 @@
             <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
               <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z"/>
             </svg>
-            Press Push Button (GPIO 17)
+            Full Spatial Scan (Spacebar)
           </button>
-          <span style="font-size:0.75rem; color:#64748b;">(Shortcut: Press Spacebar anywhere on keyboard)</span>
+        </div>
+
+        <!-- Targeted Sector Voice Buttons -->
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.5rem; margin-bottom: 0.75rem;">
+          <button class="tactile-btn" style="padding: 0.6rem; font-size: 0.78rem; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4);" onclick="triggerSectorScan('left')">
+            👈 Left (L)
+          </button>
+          <button class="tactile-btn" style="padding: 0.6rem; font-size: 0.78rem; background: rgba(245, 158, 11, 0.15); border: 1px solid rgba(245, 158, 11, 0.4);" onclick="triggerSectorScan('middle')">
+            🎯 Middle (M)
+          </button>
+          <button class="tactile-btn" style="padding: 0.6rem; font-size: 0.78rem; background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.4);" onclick="triggerSectorScan('right')">
+            👉 Right (R)
+          </button>
         </div>
 
         <!-- Terminal Logs -->
@@ -628,6 +640,25 @@
         ctx.closePath();
         ctx.fill();
 
+        // Draw Spatial Sector Dividers (Left | Middle | Right)
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+        ctx.setLineDash([4, 4]);
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(224, 0); ctx.lineTo(224, canvas.height);
+        ctx.moveTo(416, 0); ctx.lineTo(416, canvas.height);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Sector Header Labels
+        ctx.font = 'bold 11px Outfit, sans-serif';
+        ctx.fillStyle = 'rgba(56, 189, 248, 0.7)';
+        ctx.fillText('[ LEFT ]', 15, 22);
+        ctx.fillStyle = 'rgba(245, 158, 11, 0.7)';
+        ctx.fillText('[ MIDDLE ]', 240, 22);
+        ctx.fillStyle = 'rgba(16, 185, 129, 0.7)';
+        ctx.fillText('[ RIGHT ]', 430, 22);
+
         // Draw Simulated Objects
         scene.objects.forEach(obj => {
           const [x, y, w, h] = obj.box;
@@ -641,13 +672,17 @@
           ctx.lineWidth = 2;
           ctx.strokeRect(x, y, w, h);
 
+          // Spatial Sector tag
+          const cX = x + w / 2;
+          const zTag = cX < 224 ? 'LEFT' : (cX > 416 ? 'RIGHT' : 'MID');
+
           // Label Banner
           ctx.fillStyle = obj.color;
-          ctx.fillRect(x, Math.max(0, y - 24), ctx.measureText(`${obj.class} ${Math.round(obj.conf * 100)}%`).width + 16, 24);
+          ctx.fillRect(x, Math.max(0, y - 24), ctx.measureText(`${obj.class} [${zTag}]`).width + 16, 24);
 
           ctx.fillStyle = '#000';
           ctx.font = 'bold 12px Outfit, sans-serif';
-          ctx.fillText(`${obj.class.toUpperCase()} ${Math.round(obj.conf * 100)}%`, x + 8, Math.max(16, y - 7));
+          ctx.fillText(`${obj.class.toUpperCase()} [${zTag}]`, x + 8, Math.max(16, y - 7));
         });
       }
 
@@ -667,61 +702,110 @@
       }
     }
 
-    // Manual Button Trigger
+    // Manual Button Trigger (All Sectors)
     function triggerManualScan() {
       const btn = document.getElementById('tactileBtn');
       btn.classList.add('pressed');
       setTimeout(() => btn.classList.remove('pressed'), 200);
 
-      checkAndTrigger("Button Pressed");
+      checkAndTrigger("Full Spatial Scan");
     }
 
-    // Keyboard Spacebar trigger
+    // Targeted Sector Trigger
+    function triggerSectorScan(sector) {
+      checkAndTrigger(`Query ${sector.toUpperCase()} Sector`, sector);
+    }
+
+    // Keyboard Shortcuts
     window.addEventListener('keydown', (e) => {
       if (e.code === 'Space') {
         e.preventDefault();
         triggerManualScan();
+      } else if (e.key === 'l' || e.key === 'L') {
+        triggerSectorScan('left');
+      } else if (e.key === 'm' || e.key === 'M') {
+        triggerSectorScan('middle');
+      } else if (e.key === 'r' || e.key === 'R') {
+        triggerSectorScan('right');
       }
     });
 
-    // Trigger Execution
-    function checkAndTrigger(reason) {
+    // Trigger Execution with Left, Middle, and Right Voice Feedback
+    function checkAndTrigger(reason, targetSector = null) {
       const now = Date.now();
       if (now - lastScanTime < COOLDOWN) {
         return; // In cooldown
       }
       lastScanTime = now;
 
-      logMessage('TRIGGER', `${reason}. Scanning environment...`);
+      logMessage('TRIGGER', `${reason}. Scanning Left, Middle, and Right sectors...`);
 
-      // Find top object based on current scene
-      let topObject = null;
-      let direction = 'straight ahead';
+      // Group detected objects by spatial sector
+      const sectors = { left: [], middle: [], right: [] };
 
       if (!isWebcam) {
         const scene = SCENES[currentScene];
-        topObject = scene.objects[0]; // Highest priority
-
-        const centerX = topObject.box[0] + topObject.box[2] / 2;
-        if (centerX < canvas.width * 0.35) {
-          direction = 'on your left';
-        } else if (centerX > canvas.width * 0.65) {
-          direction = 'on your right';
-        }
+        scene.objects.forEach(obj => {
+          const centerX = obj.box[0] + obj.box[2] / 2;
+          if (centerX < 224) {
+            sectors.left.push(obj);
+          } else if (centerX > 416) {
+            sectors.right.push(obj);
+          } else {
+            sectors.middle.push(obj);
+          }
+        });
       } else {
-        // Fallback for webcam demo
-        topObject = { class: 'person', conf: 0.91 };
+        sectors.middle.push({ class: 'person', conf: 0.91 });
       }
 
       let speechText = '';
-      if (topObject) {
-        speechText = `${topObject.class} detected ${direction} at ${distance.toFixed(1)} meters.`;
-      } else {
-        speechText = 'Obstacle ahead, cannot identify object.';
+
+      // 1. Single Targeted Sector Query
+      if (targetSector) {
+        const items = sectors[targetSector] || [];
+        const label = targetSector === 'middle' ? 'in the middle' : `on your ${targetSector}`;
+        if (items.length > 0) {
+          const names = items.map(o => o.class).join(' and ');
+          speechText = `${names.charAt(0).toUpperCase() + names.slice(1)} detected ${label} at ${distance.toFixed(1)} meters.`;
+        } else {
+          speechText = `No objects detected ${label}.`;
+        }
+      } 
+      // 2. Full Spatial Overview (Middle -> Left -> Right)
+      else {
+        const parts = [];
+
+        // Middle (highest walking hazard priority)
+        if (sectors.middle.length > 0) {
+          const mNames = sectors.middle.map(o => o.class).join(' and ');
+          parts.push(`In the middle: ${mNames} at ${distance.toFixed(1)} meters`);
+        } else if (distance < 1.0) {
+          parts.push(`Obstacle in the middle at ${distance.toFixed(1)} meters`);
+        }
+
+        // Left sector
+        if (sectors.left.length > 0) {
+          const lNames = sectors.left.map(o => o.class).join(' and ');
+          parts.push(`On your left: ${lNames}`);
+        }
+
+        // Right sector
+        if (sectors.right.length > 0) {
+          const rNames = sectors.right.map(o => o.class).join(' and ');
+          parts.push(`On your right: ${rNames}`);
+        }
+
+        if (parts.length > 0) {
+          speechText = parts.join('. ') + '.';
+        } else {
+          speechText = 'Path clear ahead. No objects detected.';
+        }
       }
 
       // Update HUD Alert
-      document.getElementById('alertHeadline').innerText = `🔊 ${topObject ? topObject.class.toUpperCase() : 'OBSTACLE'}`;
+      const headline = targetSector ? `${targetSector.toUpperCase()} SECTOR` : (sectors.middle[0] ? sectors.middle[0].class.toUpperCase() : 'SPATIAL OVERVIEW');
+      document.getElementById('alertHeadline').innerText = `🔊 ${headline}`;
       document.getElementById('alertSubline').innerText = speechText;
 
       // Speak text via Web Speech API

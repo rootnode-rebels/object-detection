@@ -18,7 +18,10 @@ echo        Model:   model_files\yolov8_assistive_92.onnx
 echo        Classes: classes.txt (92 categories)
 echo.
 echo Controls during demo:
-echo   [SPACE]     : Press virtual hardware tactile button (scan query)
+echo   [SPACE]     : Full spatial voice scan (Middle, Left, Right)
+echo   [L]         : Voice query LEFT sector only
+echo   [M]         : Voice query MIDDLE sector only
+echo   [R]         : Voice query RIGHT sector only
 echo   [W] / [UP]  : Move closer to obstacle (decreases distance)
 echo   [S] / [DOWN]: Move farther from obstacle (increases distance)
 echo   [A]         : Toggle Auto-walk radar simulation

@@ -185,11 +185,21 @@ def main():
             # Keyboard Input
             key = cv2.waitKey(1) & 0xFF
             manual_trigger = False
+            target_sector = None
 
             if key in [ord('q'), ord('Q'), 27]:  # Q or ESC
                 break
-            elif key == ord(' '):  # SPACEBAR = Push Button
+            elif key == ord(' '):  # SPACEBAR = Push Button (All Sectors)
                 manual_trigger = True
+            elif key in [ord('l'), ord('L')]:  # Query Left Sector
+                manual_trigger = True
+                target_sector = "left"
+            elif key in [ord('m'), ord('M')]:  # Query Middle Sector
+                manual_trigger = True
+                target_sector = "middle"
+            elif key in [ord('r'), ord('R')]:  # Query Right Sector
+                manual_trigger = True
+                target_sector = "right"
             elif key in [ord('w'), ord('W'), 82]:  # W or UP arrow
                 distance_meters = max(0.2, distance_meters - 0.15)
             elif key in [ord('s'), ord('S'), 84]:  # S or DOWN arrow
@@ -206,35 +216,75 @@ def main():
             # Trigger condition: Proximity < 1.0m OR Manual Button Trigger
             current_time = time.time()
             if (distance_meters < 1.0 or manual_trigger) and (current_time - last_scan_time > COOLDOWN):
-                trigger_reason = "Button Pressed" if manual_trigger else f"Proximity Alert ({distance_meters:.2f}m)"
+                if target_sector:
+                    trigger_reason = f"Query {target_sector.upper()} Sector"
+                elif manual_trigger:
+                    trigger_reason = "Button Pressed (Full Spatial Scan)"
+                else:
+                    trigger_reason = f"Proximity Alert ({distance_meters:.2f}m)"
+
                 print(f"\n[TRIGGER] {trigger_reason}")
 
-                if detections:
-                    top = detections[0]
-                    obj_name = top["class"]
-                    direction = top["direction"]
-                    current_announcement = f"{obj_name} detected {direction} at {distance_meters:.1f} meters."
-                else:
-                    current_announcement = "Obstacle ahead, but cannot identify object."
+                # Format spatial announcement across Left, Middle, and Right
+                from yolo_detector import format_spatial_announcement
+                current_announcement = format_spatial_announcement(
+                    detections,
+                    distance_meters=distance_meters,
+                    target_zone=target_sector
+                )
 
                 voice.speak(current_announcement)
                 last_scan_time = current_time
 
             # ---------------------------------------------
-            # DRAW TELEMETRY & HUD OVERLAY
+            # DRAW TELEMETRY & SPATIAL HUD OVERLAY
             # ---------------------------------------------
             h, w = frame.shape[:2]
+            x_left = int(w * 0.35)
+            x_right = int(w * 0.65)
 
-            # 1. Bounding Boxes
+            # 1. Spatial Zone Dividers (Left | Middle | Right)
+            cv2.line(frame, (x_left, 85), (x_left, h - 45), (70, 80, 95), 1, cv2.LINE_AA)
+            cv2.line(frame, (x_right, 85), (x_right, h - 45), (70, 80, 95), 1, cv2.LINE_AA)
+
+            # Detect count per zone
+            left_count = sum(1 for d in detections if d.get("zone") == "left")
+            mid_count = sum(1 for d in detections if d.get("zone") == "middle")
+            right_count = sum(1 for d in detections if d.get("zone") == "right")
+
+            # Zone Header Badges
+            # Left Header
+            l_color = (56, 189, 248) if left_count > 0 else (120, 130, 140)
+            cv2.putText(frame, f"[ LEFT: {left_count} ]", (20, 105),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, l_color, 1, cv2.LINE_AA)
+
+            # Middle Header
+            m_color = (0, 0, 255) if (mid_count > 0 and distance_meters < 1.0) else ((0, 220, 255) if mid_count > 0 else (120, 130, 140))
+            cv2.putText(frame, f"[ MIDDLE: {mid_count} ]", (x_left + 15, 105),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, m_color, 1, cv2.LINE_AA)
+
+            # Right Header
+            r_color = (56, 189, 248) if right_count > 0 else (120, 130, 140)
+            cv2.putText(frame, f"[ RIGHT: {right_count} ]", (x_right + 15, 105),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, r_color, 1, cv2.LINE_AA)
+
+            # 2. Bounding Boxes
             for det in detections:
                 box = det["box"]
-                label = f"{det['class']} {int(det['confidence'] * 100)}%"
-                color = (56, 189, 248)  # Cyan
+                z = det.get("zone", "middle")
+                if z == "middle":
+                    color = (0, 80, 255)  # Orange/Red for center obstacle
+                elif z == "left":
+                    color = (255, 180, 0)  # Cyan/Blue
+                else:
+                    color = (0, 220, 100)  # Green
+
+                label = f"{det['class']} ({z})"
                 cv2.rectangle(frame, (box[0], box[1]), (box[2], box[3]), color, 2)
                 cv2.putText(frame, label, (box[0], max(20, box[1] - 8)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-            # 2. Top Banner
+            # 3. Top Banner
             banner_color = (15, 23, 42)
             cv2.rectangle(frame, (0, 0), (w, 85), banner_color, -1)
             cv2.line(frame, (0, 85), (w, 85), (56, 189, 248), 1)
@@ -243,22 +293,24 @@ def main():
             dist_color = (0, 0, 255) if distance_meters < 1.0 else (0, 255, 0)
             status_text = "PROXIMITY ALERT (<1.0m)" if distance_meters < 1.0 else "CLEAR PATH"
             cv2.putText(frame, f"DISTANCE: {distance_meters:.2f}m [{status_text}]",
-                        (15, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, dist_color, 2)
+                        (15, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.58, dist_color, 2)
 
             walk_mode_str = "AUTO-WALK [ON]" if auto_walk else "MANUAL [W/S]"
-            cv2.putText(frame, f"FPS: {fps:.1f} | Mode: {walk_mode_str} | [SPACE]: Push Button",
-                        (15, 52), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+            cv2.putText(frame, f"FPS: {fps:.1f} | Mode: {walk_mode_str} | [SPACE]: Full Scan",
+                        (15, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
+            cv2.putText(frame, "Hotkeys: [L] Left | [M] Middle | [R] Right | [W/S] Dist | [A] Auto | [Q] Quit",
+                        (15, 68), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (160, 175, 190), 1)
 
-            # Radar Distance Bar
+            # Radar Distance Indicator Bar
             bar_w = int((distance_meters / 3.0) * (w - 30))
-            cv2.rectangle(frame, (15, 65), (15 + bar_w, 75), dist_color, -1)
-            cv2.rectangle(frame, (15, 65), (w - 15, 75), (80, 80, 80), 1)
+            cv2.rectangle(frame, (15, 74), (15 + bar_w, 80), dist_color, -1)
+            cv2.rectangle(frame, (15, 74), (w - 15, 80), (60, 65, 75), 1)
 
-            # 3. Bottom Voice Feedback Transcript Banner
+            # 4. Bottom Voice Feedback Transcript Banner
             cv2.rectangle(frame, (0, h - 45), (w, h), (15, 23, 42), -1)
-            cv2.line(frame, (0, h - 45), (w, h - 45), (0, 255, 0), 1)
-            cv2.putText(frame, f"SPEECH: \"{current_announcement}\"",
-                        (15, h - 18), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (0, 255, 180), 1)
+            cv2.line(frame, (0, h - 45), (w, h - 45), (0, 255, 180), 1)
+            cv2.putText(frame, f"VOICE: \"{current_announcement}\"",
+                        (15, h - 16), cv2.FONT_HERSHEY_SIMPLEX, 0.46, (0, 255, 180), 1)
 
             cv2.imshow("Smart Vision Assistant - PC Simulator", frame)
 

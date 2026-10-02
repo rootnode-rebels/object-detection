@@ -260,35 +260,35 @@ def main():
             # Trigger condition: Obstacle < 1m OR Button pressed
             time_since_last_alert = time.time() - last_scan_time
             if (distance_meters < 1.0 or button_pressed) and (time_since_last_alert > COOLDOWN):
-                trigger_reason = "Button Pressed" if button_pressed else f"Proximity Alert ({distance_meters:.2f}m)"
+                trigger_reason = "Button Pressed (Tactile Scan)" if button_pressed else f"Proximity Alert ({distance_meters:.2f}m)"
                 print(f"\n[TRIGGER] {trigger_reason}")
 
-                if detections:
-                    top_det = detections[0]
-                    obj_name = top_det["class"]
-                    direction = top_det["direction"]
-
-                    if distance_meters <= 3.0:
-                        announcement = f"{obj_name} detected {direction} at {distance_meters:.1f} meters."
-                    else:
-                        announcement = f"{obj_name} detected {direction}."
-                    speak(announcement)
-                else:
-                    speak("Obstacle ahead, but cannot identify object.")
+                from yolo_detector import format_spatial_announcement
+                announcement = format_spatial_announcement(detections, distance_meters=distance_meters)
+                speak(announcement)
 
                 last_scan_time = time.time()
 
             # Graphical Telemetry Display
             if not args.headless:
+                h, w = frame.shape[:2]
+                x_left = int(w * 0.35)
+                x_right = int(w * 0.65)
                 cpu_load = get_cpu_utilization()
 
-                # Draw bounding boxes
+                # Draw Spatial Zone Dividers
+                cv2.line(frame, (x_left, 0), (x_left, h), (60, 70, 80), 1, cv2.LINE_AA)
+                cv2.line(frame, (x_right, 0), (x_right, h), (60, 70, 80), 1, cv2.LINE_AA)
+
+                # Draw bounding boxes colored by spatial zone
                 for det in detections:
                     box = det["box"]
-                    label = f"{det['class']} {int(det['confidence'] * 100)}%"
-                    cv2.rectangle(frame, (box[0], box[1]), (box[2], box[3]), (0, 255, 0), 2)
+                    z = det.get("zone", "middle")
+                    color = (0, 80, 255) if z == "middle" else ((255, 180, 0) if z == "left" else (0, 220, 100))
+                    label = f"{det['class']} ({z})"
+                    cv2.rectangle(frame, (box[0], box[1]), (box[2], box[3]), color, 2)
                     cv2.putText(frame, label, (box[0], max(20, box[1] - 8)),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
                 # Draw Telemetry HUD
                 cv2.putText(frame, f"Mode: CPU YOLOv8 ({args.resolution}x{args.resolution})",
@@ -297,6 +297,8 @@ def main():
                             (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
                 cv2.putText(frame, f"Distance: {distance_meters:.2f}m",
                             (10, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+                cv2.putText(frame, "Zones: [ LEFT | MIDDLE | RIGHT ]",
+                            (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
 
                 cv2.imshow("Raspberry Pi 5 Object Detection", frame)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
