@@ -35,7 +35,9 @@ sudo apt install python3-opencv python3-gpiozero python3-psutil python3-numpy es
 
 ### Step 1: Clone or Copy Project Files
 ```bash
-cd ~/ai-object-detection
+cd ~
+git clone https://github.com/rootnode-rebels/ai-object-detection.git
+cd ai-object-detection
 ```
 
 ### Step 2: Install Python Dependencies
@@ -43,25 +45,48 @@ cd ~/ai-object-detection
 pip install -r requirements.txt --break-system-packages
 ```
 
-### Step 3: Run the Smart Assistant
-Launch with live graphical HUD:
+---
+
+## 4. Generating the 92-Class Assistive Model (Method 1: YOLO-World)
+
+To enable detection and voice announcements for all **92 custom objects** (staircases, doors, auto-rickshaws, potholes, switches, etc.) without manual dataset annotation:
+
+### Option A: Generate in 30 Seconds via Free Google Colab (Recommended)
+1. Open a new notebook at [Google Colab](https://colab.research.google.com).
+2. Paste and run this single code block:
+```python
+!git clone https://github.com/rootnode-rebels/ai-object-detection.git
+%cd ai-object-detection
+!pip install ultralytics onnx
+!python build_assistive_model.py --mode yoloworld --imgsz 320
+
+from google.colab import files
+files.download('model_files/yolov8_assistive_92.onnx')
+```
+3. Copy the downloaded `yolov8_assistive_92.onnx` into the `model_files/` folder on your Raspberry Pi.
+
+### Option B: Generate Directly on Raspberry Pi 5
 ```bash
-python3 smart_assistant.py
+pip install ultralytics onnx --break-system-packages
+python3 build_assistive_model.py --mode yoloworld --imgsz 320
+```
+
+---
+
+## 5. Running the Smart Assistant
+
+### Run with the 92-Class Assistive Model:
+```bash
+python3 smart_assistant.py --model model_files/yolov8_assistive_92.onnx --classes classes.txt --resolution 320
 ```
 
 **Options**:
 * `--resolution 320`: Fast mode (~15-20 FPS on Pi 5 CPU, default)
 * `--resolution 640`: High-resolution mode (maximum accuracy)
-* `--headless`: Run without desktop GUI (for battery / portable use)
-* `--conf 0.5`: Confidence threshold
+* `--headless`: Run without desktop GUI (for wearable / portable use)
+* `--conf 0.5`: Detection confidence threshold
 
-```bash
-# Example: Run headless in fast mode
-python3 smart_assistant.py --resolution 320 --headless
-```
-
-### Step 4: Run Performance Benchmark
-Validate the CPU frame rate and temperature on your device:
+### Run Performance Benchmark:
 ```bash
 python3 benchmark_performance.py
 ```
