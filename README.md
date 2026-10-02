@@ -2,6 +2,8 @@
 
 A real-time object detection and smart vision assistant engineered for **Raspberry Pi 5** using a CPU-optimized **YOLOv8** architecture (no dedicated NPU or AI HAT required).
 
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/rootnode-rebels/ai-object-detection/blob/main/Build_Assistive_92_Model.ipynb)
+
 ---
 
 ## 🚀 Key Features
