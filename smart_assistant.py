@@ -103,7 +103,7 @@ def get_cpu_utilization():
 tts_process = None
 
 def speak(text):
-    """Speaks text asynchronously using espeak without overlapping."""
+    """Speaks text asynchronously using espeak (Linux/Pi) or native OS speech without blocking."""
     global tts_process
     print(f"🔊 SPEAKING: {text}")
 
@@ -117,6 +117,21 @@ def speak(text):
     try:
         tts_process = subprocess.Popen(['espeak', '-ven+f3', '-s155', text])
     except FileNotFoundError:
+        # Cross-platform fallback for Windows and macOS
+        if sys.platform == "win32":
+            clean_text = text.replace('"', '').replace("'", "")
+            ps_cmd = f'(New-Object -ComObject SAPI.SpVoice).Speak("{clean_text}")'
+            try:
+                tts_process = subprocess.Popen(["powershell", "-NoProfile", "-Command", ps_cmd])
+                return
+            except Exception:
+                pass
+        elif sys.platform == "darwin":
+            try:
+                tts_process = subprocess.Popen(["say", text])
+                return
+            except Exception:
+                pass
         print("[WARN] 'espeak' is not installed. Run: sudo apt install espeak")
     except Exception as e:
         print(f"[WARN] TTS error: {e}")
@@ -188,23 +203,33 @@ class ThreadedCameraStream:
 # ==========================================
 def main():
     parser = argparse.ArgumentParser(description="Raspberry Pi 5 CPU YOLOv8 Smart Vision Assistant")
-    parser.add_argument("--model", type=str, default=YOLO_ONNX_PATH, help="Path to YOLOv8 ONNX model")
+    parser.add_argument("--model", type=str, default=None, help="Path to YOLOv8 ONNX model")
     parser.add_argument("--resolution", type=int, default=320, choices=[320, 640],
                         help="YOLO input resolution: 320 for high FPS (~15-20 FPS on Pi 5), 640 for max accuracy")
+    parser.add_argument("--conf", type=float, default=0.45, help="Confidence threshold (default: 0.45)")
     parser.add_argument("--headless", action="store_true", help="Run without graphical display window")
     parser.add_argument("--classes", type=str, default=None,
                         help="Custom classes: comma-separated list or path to a text file containing class names")
     args = parser.parse_args()
 
-    # Parse custom classes if provided
+    # Auto-detect assistive 92 model if not specified
+    model_to_use = args.model
+    if model_to_use is None and os.path.exists("model_files/yolov8_assistive_92.onnx"):
+        model_to_use = "model_files/yolov8_assistive_92.onnx"
+
+    # Parse custom classes if provided, or auto-load classes.txt for assistive model
+    classes_file = args.classes
+    if classes_file is None and model_to_use == "model_files/yolov8_assistive_92.onnx" and os.path.exists("classes.txt"):
+        classes_file = "classes.txt"
+
     custom_classes = None
-    if args.classes:
-        if os.path.exists(args.classes):
-            with open(args.classes, "r") as f:
+    if classes_file:
+        if os.path.exists(classes_file):
+            with open(classes_file, "r") as f:
                 custom_classes = [line.strip() for line in f if line.strip()]
         else:
-            custom_classes = [c.strip() for c in args.classes.split(",") if c.strip()]
-        print(f"[INFO] Loaded {len(custom_classes)} custom classes: {custom_classes}")
+            custom_classes = [c.strip() for c in classes_file.split(",") if c.strip()]
+        print(f"[INFO] Loaded {len(custom_classes)} custom classes from {classes_file}")
 
     print("\n" + "=" * 65)
     print("  Raspberry Pi 5 Smart Vision Assistant (CPU-Optimized YOLOv8)")
@@ -213,7 +238,7 @@ def main():
 
     # Initialize CPU YOLOv8 Detector
     detector = YOLODetector(
-        model_path=args.model,
+        model_path=model_to_use,
         classes=custom_classes,
         conf_threshold=args.conf,
         input_size=(args.resolution, args.resolution)

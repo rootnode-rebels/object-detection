@@ -8,15 +8,16 @@ A real-time object detection and smart vision assistant engineered for **Raspber
 
 ## 🚀 Key Features
 
-* **CPU-Optimized YOLOv8 Inference**: Runs lightweight YOLOv8n ONNX via OpenCV DNN with ARM NEON acceleration, achieving ~15-20 FPS directly on the Raspberry Pi 5 CPU.
-* **80 COCO Classes with Spatial Awareness**: Detects everyday objects and calculates their spatial position (*"on your left"*, *"straight ahead"*, *"on your right"*).
+* **CPU-Optimized YOLOv8 Inference**: Runs lightweight YOLOv8 ONNX via OpenCV DNN with ARM NEON acceleration, achieving ~15-20 FPS directly on the Raspberry Pi 5 CPU.
+* **92 Assistive Classes with Multi-Sector Spatial Feedback**: Detects navigation hazards and everyday objects with precise spatial localization across **Left**, **Middle**, and **Right** zones with natural prioritized voice feedback.
+* **Instant Sector Hotkey Queries**: Query targeted zones instantly with dedicated triggers (`[L]` Left, `[M]` Middle, `[R]` Right, or `[SPACE]` for full overview).
 * **Buffer-Free High-Speed Video Pipeline**: Threaded camera stream eliminates OpenCV internal frame buffer delay, guaranteeing zero-latency live vision analysis.
 * **Proximity & Manual Triggers**:
   * HC-SR04 ultrasonic sensor continuously monitors for obstacles closer than 1.0 meter.
   * Tactile push button enables instant on-demand voice queries.
-* **Non-Blocking Text-to-Speech**: Integrated `espeak` engine speaks directional audio alerts asynchronously without freezing the video stream.
-* **Real-Time Telemetry HUD**: Live onscreen overlay displaying current FPS, CPU load %, distance reading, and object bounding boxes.
-* **Hardware Benchmark Tool**: Built-in benchmarking script to measure frame rates, latencies, CPU load, and SoC temperatures.
+* **Non-Blocking Text-to-Speech**: Non-blocking audio alerts (`espeak` on Linux/Pi, native SAPI on Windows, `say` on macOS) without freezing the video stream.
+* **Real-Time Telemetry HUD**: Live onscreen overlay displaying current FPS, CPU load %, distance reading, sector bounding boxes, and vocal transcripts.
+* **Hardware Benchmark Tool**: Built-in benchmarking tool to measure pure inference, spatial post-processing, sustained FPS, CPU load, and SoC temperatures.
 
 ---
 
@@ -197,22 +198,27 @@ flowchart TD
 ### Option A: Local PC Simulation (Windows / Mac / Linux)
 You can test the entire pipeline on your PC with your webcam, simulated distance sensor, and native voice synthesis:
 
-1. **One-Click Run (Windows):**
-   Simply double-click `run_pc_demo.bat`.
+1. **1-Click Launchers (Windows):**
+   * `run_pc_demo.bat` : Launches the full webcam + 92-class AI simulator with real-time HUD and audio.
+   * `run_benchmark.bat` : Runs a 100-frame hardware & AI inference benchmark.
+   * `run_web_simulator.bat` : Opens the interactive browser-based hardware simulator.
 
 2. **Manual Command:**
    ```bash
    python simulate_pc.py --model model_files/yolov8_assistive_92.onnx --classes classes.txt --resolution 320
    ```
    *Controls during PC simulation:*
-   * `[SPACE]` : Press virtual hardware tactile button (triggers on-demand query)
+   * `[SPACE]` : Full spatial voice query across all sectors (Middle, Left, Right)
+   * `[L]` : Voice query **Left** sector only
+   * `[M]` : Voice query **Middle** (direct path) sector only
+   * `[R]` : Voice query **Right** sector only
    * `[W]` / `[UP]` : Move closer to obstacle (decreases ultrasonic distance)
    * `[S]` / `[DOWN]` : Move farther from obstacle (increases ultrasonic distance)
    * `[A]` : Toggle Auto-walk radar oscillation mode
    * `[Q]` / `[ESC]` : Exit simulation
 
 3. **Interactive Hardware Web Simulator:**
-   Open `simulation.html` in any web browser to interactively test the ultrasonic radar, push button, HUD, and voice synthesis in a GUI environment.
+   Open `simulation.html` in any web browser to interactively test the ultrasonic radar, push button, spatial sector HUD, and voice synthesis in a GUI environment.
 
 ---
 
@@ -248,7 +254,7 @@ python3 smart_assistant.py --headless
 
 #### 4. Run Benchmark Tool
 ```bash
-python3 benchmark_performance.py
+python3 benchmark_performance.py --frames 100 --resolution 320
 ```
 
 ---
@@ -267,11 +273,13 @@ The custom-trained assistive model detects 92 essential indoor, outdoor, and haz
 ## 📁 Repository Structure
 
 ```text
-├── run_pc_demo.bat             # 1-Click Windows PC demo launcher
+├── run_pc_demo.bat             # 1-Click Windows PC simulation launcher
+├── run_benchmark.bat           # 1-Click Windows AI & CPU benchmark tool
+├── run_web_simulator.bat       # 1-Click launcher for interactive web simulation
 ├── simulate_pc.py              # Native PC simulation & CV demo with speech
 ├── simulation.html             # Interactive browser-based hardware simulator
 ├── smart_assistant.py          # Main real-time Raspberry Pi 5 assistant & HUD
-├── yolo_detector.py            # CPU-optimized YOLOv8 inference engine
+├── yolo_detector.py            # CPU-optimized YOLOv8 inference & spatial engine
 ├── build_assistive_model.py    # Zero-shot CLIP encoder for custom classes
 ├── classes.txt                 # List of 92 assistive object classes
 ├── benchmark_performance.py    # Performance & thermal benchmarking tool

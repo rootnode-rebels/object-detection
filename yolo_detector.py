@@ -27,6 +27,8 @@ COCO_CLASSES = [
 
 MODEL_DIR = "model_files"
 YOLO_ONNX_PATH = os.path.join(MODEL_DIR, "yolov8n.onnx")
+ASSISTIVE_ONNX_PATH = os.path.join(MODEL_DIR, "yolov8_assistive_92.onnx")
+CLASSES_TXT_PATH = "classes.txt"
 YOLO_ONNX_URL = "https://github.com/ultralytics/assets/releases/download/v8.2.0/yolov8n.onnx"
 
 
@@ -67,22 +69,42 @@ class YOLODetector:
         self.conf_threshold = conf_threshold
         self.nms_threshold = nms_threshold
         self.input_size = input_size  # (320, 320) yields ~15-20 FPS on Pi 5 CPU; (640, 640) for max accuracy
-        self.classes = classes if classes is not None else COCO_CLASSES
 
-        if model_path is None or not os.path.exists(model_path):
+        # Smart Model Selection:
+        # 1. User-supplied model_path (if exists)
+        # 2. Local 92-class Assistive ONNX model (if exists)
+        # 3. Local YOLOv8n ONNX model
+        # 4. Download YOLOv8n ONNX model
+        chosen_model = None
+        if model_path is not None and os.path.exists(model_path):
+            chosen_model = model_path
+        elif os.path.exists(ASSISTIVE_ONNX_PATH) and os.path.getsize(ASSISTIVE_ONNX_PATH) > 10_000_000:
+            chosen_model = ASSISTIVE_ONNX_PATH
+        elif os.path.exists(YOLO_ONNX_PATH) and os.path.getsize(YOLO_ONNX_PATH) > 10_000_000:
+            chosen_model = YOLO_ONNX_PATH
+        else:
             try:
-                model_path = download_yolo_onnx(YOLO_ONNX_PATH)
+                chosen_model = download_yolo_onnx(YOLO_ONNX_PATH)
             except Exception as e:
-                print(f"[ERROR] Could not download YOLOv8 model: {e}")
-                model_path = YOLO_ONNX_PATH
+                print(f"[WARN] Could not download default YOLOv8 model: {e}")
+                chosen_model = YOLO_ONNX_PATH
 
-        print(f"[INFO] Loading YOLOv8 ONNX model on CPU: {model_path}...")
-        self.net = cv2.dnn.readNetFromONNX(model_path)
+        # Smart Classes Selection:
+        if classes is not None:
+            self.classes = classes
+        elif chosen_model == ASSISTIVE_ONNX_PATH and os.path.exists(CLASSES_TXT_PATH):
+            with open(CLASSES_TXT_PATH, "r") as f:
+                self.classes = [line.strip() for line in f if line.strip()]
+        else:
+            self.classes = COCO_CLASSES
+
+        print(f"[INFO] Loading YOLOv8 ONNX model on CPU: {chosen_model}...")
+        self.net = cv2.dnn.readNetFromONNX(chosen_model)
 
         # Optimize for CPU execution on Raspberry Pi (ARM NEON)
         self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
         self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
-        print(f"[INFO] YOLOv8 CPU detector ready. Input resolution: {self.input_size[0]}x{self.input_size[1]}")
+        print(f"[INFO] YOLOv8 CPU detector ready with {len(self.classes)} classes. Input resolution: {self.input_size[0]}x{self.input_size[1]}")
 
     def detect(self, frame):
         """
