@@ -75,7 +75,7 @@ graph TD
     end
 
     %% PCIe Link
-    PCIE <== "PCIe Gen 3 FFC Ribbon (High-Bandwidth)" ==> NPU
+    PCIE <-->|"PCIe Gen 3 FFC Ribbon (High-Bandwidth)"| NPU
 
     %% Camera Link
     CAM -->|"Raw Video Stream (60 FPS)"| CSI
@@ -147,55 +147,55 @@ The architecture decouples the camera stream, hardware sensor polling, deep lear
 ```mermaid
 flowchart TD
     subgraph Initialization ["1. System Boot & Initialization"]
-        INIT_START([System Start]) --> PCIE_INIT[Initialize PCIe Gen 3 Link]
-        PCIE_INIT --> HAILO_INIT[Configure HailoRT VDevice & Load YOLOv8 HEF]
-        HAILO_INIT --> CAM_INIT[Start HighSpeedCameraStream Background Thread]
-        CAM_INIT --> GPIO_INIT[Initialize GPIO: DistanceSensor & Button]
-        GPIO_INIT --> READY_VOICE[Speak: 'Hailo AI system ready']
+        INIT_START(["System Start"]) --> PCIE_INIT["Initialize PCIe Gen 3 Link"]
+        PCIE_INIT --> HAILO_INIT["Configure HailoRT VDevice & Load YOLOv8 HEF"]
+        HAILO_INIT --> CAM_INIT["Start HighSpeedCameraStream Background Thread"]
+        CAM_INIT --> GPIO_INIT["Initialize GPIO: DistanceSensor & Button"]
+        GPIO_INIT --> READY_VOICE["Speak: System Ready"]
     end
 
     subgraph Streaming ["2. Continuous 60 FPS Video Pipeline"]
-        CAM_INIT -.-> CAM_LOOP[Threaded Camera Capture Loop]
-        CAM_LOOP -->|Read Frame @ 60 FPS| BUFFER[Thread-Safe Frame Buffer]
-        BUFFER -.->|Latest Live Frame| NPU_INFER
+        CAM_INIT -.-> CAM_LOOP["Threaded Camera Capture Loop"]
+        CAM_LOOP -->|"Read Frame @ 60 FPS"| BUFFER["Thread-Safe Frame Buffer"]
+        BUFFER -.->|"Latest Live Frame"| NPU_INFER
     end
 
     subgraph Polling ["3. Sensor Polling Loop (Every 100ms)"]
-        READY_VOICE --> LOOP_START[Poll Distance & Button State]
-        LOOP_START --> READ_SENSORS[Read get_distance and is_button_pressed]
-        READ_SENSORS --> TRIGGER_CHECK{Trigger Condition Met?<br/>Distance < 1.0m OR Button Pressed<br/>AND Cooldown > 3.0s?}
+        READY_VOICE --> LOOP_START["Poll Distance & Button State"]
+        LOOP_START --> READ_SENSORS["Read get_distance and is_button_pressed"]
+        READ_SENSORS --> TRIGGER_CHECK{"Trigger Condition Met?<br/>Distance under 1.0m OR Button Pressed<br/>AND Cooldown over 3.0s"}
     end
 
     TRIGGER_CHECK -- No --> LOOP_START
 
     subgraph AI_Inference ["4. Hailo-8 NPU Object Detection"]
-        TRIGGER_CHECK -- Yes --> GRAB_FRAME[Fetch Freshest Frame from Buffer]
-        GRAB_FRAME --> RESIZE[Resize to 640x640 RGB]
-        RESIZE --> NPU_INFER[Offload to Hailo-8 NPU via InferVStreams]
-        NPU_INFER --> NMS[Hailo On-Chip NMS & Class Parsing]
-        NMS --> FILTER_CONF{Any Detection > 50% Confidence?}
+        TRIGGER_CHECK -- Yes --> GRAB_FRAME["Fetch Freshest Frame from Buffer"]
+        GRAB_FRAME --> RESIZE["Resize to 640x640 RGB"]
+        RESIZE --> NPU_INFER["Offload to Hailo-8 NPU via InferVStreams"]
+        NPU_INFER --> NMS["Hailo On-Chip NMS & Class Parsing"]
+        NMS --> FILTER_CONF{"Any Detection over 50% Confidence?"}
     end
 
     subgraph Audio_Feedback ["5. Spatial Awareness & Voice Output"]
-        FILTER_CONF -- Yes --> CALC_DIR[Calculate Spatial Direction:<br/>Left / Straight Ahead / Right]
-        CALC_DIR --> FORMAT_ALERT[Format Speech: '[Object] detected [Direction] at [Distance]m']
-        FILTER_CONF -- No --> FORMAT_GENERIC[Format Speech: 'Obstacle ahead, cannot identify object']
-        FORMAT_ALERT --> SPEAK_ASYNC[Speak Asynchronously via espeak]
+        FILTER_CONF -- Yes --> CALC_DIR["Calculate Spatial Direction:<br/>Left / Straight Ahead / Right"]
+        CALC_DIR --> FORMAT_ALERT["Format Speech: Object detected (Direction) at (Distance)m"]
+        FILTER_CONF -- No --> FORMAT_GENERIC["Format Speech: Obstacle ahead, cannot identify object"]
+        FORMAT_ALERT --> SPEAK_ASYNC["Speak Asynchronously via espeak"]
         FORMAT_GENERIC --> SPEAK_ASYNC
     end
 
     subgraph Telemetry ["6. Real-Time HUD Overlay & Display"]
-        SPEAK_ASYNC --> OVERLAY[Render Bounding Boxes + Direction Labels]
-        OVERLAY --> HUD[Display Live FPS, CPU Load %, and NPU Status]
-        HUD --> RESET_TIMER[Reset 3.0s Cooldown Timer]
+        SPEAK_ASYNC --> OVERLAY["Render Bounding Boxes + Direction Labels"]
+        OVERLAY --> HUD["Display Live FPS, CPU Load %, and NPU Status"]
+        HUD --> RESET_TIMER["Reset 3.0s Cooldown Timer"]
         RESET_TIMER --> LOOP_START
     end
 
     subgraph Teardown ["7. Safe Shutdown"]
-        LOOP_START -.->|SIGINT / Ctrl+C| CLEANUP[Release Camera Stream]
-        CLEANUP --> CLOSE_HAILO[Close Hailo VDevice]
-        CLOSE_HAILO --> CLOSE_GPIO[Close GPIO Handles & Terminate TTS]
-        CLOSE_GPIO --> EXIT([System Safely Halted])
+        LOOP_START -.->|"SIGINT / Ctrl+C"| CLEANUP["Release Camera Stream"]
+        CLEANUP --> CLOSE_HAILO["Close Hailo VDevice"]
+        CLOSE_HAILO --> CLOSE_GPIO["Close GPIO Handles & Terminate TTS"]
+        CLOSE_GPIO --> EXIT(["System Safely Halted"])
     end
 
     classDef init fill:#1565c0,stroke:#0d47a1,stroke-width:2px,color:#fff;
