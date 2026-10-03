@@ -43,15 +43,22 @@ echo [INFO] Launching PC Simulator with:
 echo        Model:   model_files\yolov8_assistive_92.onnx
 echo        Classes: classes.txt (92 categories)
 echo.
-echo Controls during demo:
-echo   [SPACE]     : Full spatial voice scan (Middle, Left, Right)
-echo   [L]         : Voice query LEFT sector only
-echo   [M]         : Voice query MIDDLE sector only
-echo   [R]         : Voice query RIGHT sector only
-echo   [W] / [UP]  : Move closer to obstacle (decreases distance)
-echo   [S] / [DOWN]: Move farther from obstacle (increases distance)
-echo   [A]         : Toggle Auto-walk radar simulation
-echo   [Q] / [ESC] : Quit simulation
+echo [INFO] Automatic Voice Guidance is ACTIVE:
+echo        - Obstacle on left   --^> Voice announces: "Obstacle on the left. Go right."
+echo        - Obstacle on right  --^> Voice announces: "Obstacle on the right. Go left."
+echo        - Obstacle ahead     --^> Voice announces: "Obstacle directly ahead. Go right or go left."
+echo        No button press required! System speaks automatically in real-time.
+echo.
+echo Interactive Controls:
+echo   [J] / [LEFT]  : Shift obstacle to LEFT (Triggers "Go right")
+echo   [K] / [RIGHT] : Shift obstacle to RIGHT (Triggers "Go left")
+echo   [C]           : Center obstacle
+echo   [W] / [UP]    : Move closer to obstacle (decreases distance)
+echo   [S] / [DOWN]  : Move farther from obstacle (increases distance)
+echo   [A]           : Toggle Auto-walk radar simulation
+echo   [SPACE]       : Optional manual instant scan
+echo   [L] / [M] / [R]: Query specific sector (Left / Middle / Right)
+echo   [Q] / [ESC]   : Quit simulation
 echo.
 
 %PYTHON_BIN% simulate_pc.py --model model_files\yolov8_assistive_92.onnx --classes classes.txt --resolution 320
