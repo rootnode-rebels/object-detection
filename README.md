@@ -26,12 +26,12 @@ A real-time object detection and smart vision assistant engineered for **Raspber
 | Component | Specification |
 |---|---|
 | **Host System** | Raspberry Pi 5 (Quad-core ARM Cortex-A76 @ 2.4 GHz) |
-| **Deep Learning Model** | YOLOv8n ONNX (80 COCO object classes) |
+| **Deep Learning Model** | YOLOv8n ONNX (80 COCO classes / Custom 92 Assistive Vision classes) |
 | **Inference Engine** | OpenCV DNN (CPU Backend with ARM NEON SIMD) |
 | **Resolution Modes** | `320x320` (~15-20 FPS fast mode) / `640x640` (high accuracy mode) |
 | **Proximity Sensor** | HC-SR04 Ultrasonic Distance Sensor |
 | **Manual Trigger** | Push button with internal pull-up |
-| **Audio Feedback** | `espeak` Text-to-Speech Engine |
+| **Audio Feedback** | Cross-platform TTS (`espeak` on Linux/Pi, SAPI on Windows, `say` on macOS) |
 
 ---
 
@@ -237,14 +237,14 @@ pip install -r requirements.txt --break-system-packages
 
 #### 3. Run the Smart Assistant
 
-**Standard 92-Class Assistive Mode (~15-20 FPS on Pi 5 CPU):**
-```bash
-python3 smart_assistant.py --model model_files/yolov8_assistive_92.onnx --classes classes.txt --resolution 320
-```
-
-**COCO-80 Baseline Mode:**
+**Standard Mode (Auto-detects 92-class model or COCO baseline at ~15-20 FPS on Pi 5 CPU):**
 ```bash
 python3 smart_assistant.py --resolution 320
+```
+
+**Explicit Model & Custom Classes Selection:**
+```bash
+python3 smart_assistant.py --model model_files/yolov8_assistive_92.onnx --classes classes.txt --resolution 320
 ```
 
 **Headless Mode (for battery-powered wearable use):**
@@ -281,6 +281,8 @@ The custom-trained assistive model detects 92 essential indoor, outdoor, and haz
 ├── smart_assistant.py          # Main real-time Raspberry Pi 5 assistant & HUD
 ├── yolo_detector.py            # CPU-optimized YOLOv8 inference & spatial engine
 ├── build_assistive_model.py    # Zero-shot CLIP encoder for custom classes
+├── Build_Assistive_92_Model.ipynb # Google Colab notebook to generate 92-class ONNX model
+├── train_custom_yolo.py        # Custom YOLOv8 training and ONNX export pipeline
 ├── classes.txt                 # List of 92 assistive object classes
 ├── benchmark_performance.py    # Performance & thermal benchmarking tool
 ├── SETUP_GUIDE.md              # Raspberry Pi 5 hardware wiring & setup guide
