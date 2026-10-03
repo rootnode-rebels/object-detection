@@ -28,6 +28,11 @@ import numpy as np
 
 # Ensure current directory is in sys.path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(line_buffering=True)
+except Exception:
+    pass
 
 # Import YOLO detector
 try:
@@ -188,15 +193,18 @@ def main():
         except Exception as e:
             print(f"[WARN] Could not initialize YOLOv8: {e}. Running in camera demo mode.")
 
-    # Initialize Webcam
+    # Initialize Webcam with Virtual Camera Fallback
     print(f"[INFO] Opening webcam device {args.cam}...")
     cap = cv2.VideoCapture(args.cam)
-    if not cap.isOpened():
-        print(f"[ERROR] Could not open webcam at index {args.cam}. Please verify your camera.")
-        sys.exit(1)
+    virtual_cam = False
 
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    if not cap.isOpened():
+        print(f"[WARN] Physical webcam {args.cam} not accessible (missing or in use).")
+        print("[INFO] Starting Virtual Synthetic Camera Feed for offline PC simulation...")
+        virtual_cam = True
+    else:
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
     # Simulation State
     distance_meters = 1.80
@@ -214,6 +222,7 @@ def main():
 
     print("\n" + "=" * 65)
     print("  ASSISTIVE VISION PC SIMULATOR RUNNING")
+    print(f"  Camera Mode : {'VIRTUAL SYNTHETIC SCENE' if virtual_cam else 'LIVE WEBCAM'}")
     print("  Controls:")
     print("    [SPACE]     : Push Button Trigger (Manual Query)")
     print("    [W] / [UP]  : Move closer to obstacle")
@@ -224,10 +233,30 @@ def main():
 
     try:
         while True:
-            ret, frame = cap.read()
-            if not ret or frame is None:
-                time.sleep(0.01)
-                continue
+            if not virtual_cam:
+                ret, frame = cap.read()
+                if not ret or frame is None:
+                    time.sleep(0.01)
+                    continue
+            else:
+                # Render simulated indoor hallway scene
+                frame = np.full((480, 640, 3), (25, 30, 42), dtype=np.uint8)
+                # Perspective room grid lines
+                cv2.line(frame, (0, 480), (200, 240), (50, 65, 80), 2, cv2.LINE_AA)
+                cv2.line(frame, (640, 480), (440, 240), (50, 65, 80), 2, cv2.LINE_AA)
+                cv2.line(frame, (200, 240), (440, 240), (50, 65, 80), 2, cv2.LINE_AA)
+                cv2.line(frame, (200, 0), (200, 240), (40, 50, 65), 1)
+                cv2.line(frame, (440, 0), (440, 240), (40, 50, 65), 1)
+
+                # Simulated obstacle size inversely proportional to distance
+                sc = max(0.4, min(1.8, (2.8 - distance_meters) / 1.4))
+                ow, oh = int(120 * sc), int(200 * sc)
+                ox, oy = int(320 - ow / 2), int(280 - oh / 2)
+                cv2.rectangle(frame, (ox, oy), (ox + ow, oy + oh), (220, 100, 0), -1, cv2.LINE_AA)
+                cv2.rectangle(frame, (ox, oy), (ox + ow, oy + oh), (255, 180, 0), 2, cv2.LINE_AA)
+                cv2.putText(frame, "SIMULATED PERSON (WALKING AHEAD)", (ox - 20, max(20, oy - 10)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1)
+                time.sleep(0.03)
 
             frame_count += 1
             if time.time() - fps_start >= 1.0:
@@ -380,7 +409,11 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        cap.release()
+        if cap is not None and not virtual_cam:
+            try:
+                cap.release()
+            except Exception:
+                pass
         cv2.destroyAllWindows()
         if detector is not None:
             detector.close()
