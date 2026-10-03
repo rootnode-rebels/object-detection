@@ -1,0 +1,60 @@
+name: Release Standalone App
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller opencv-python numpy psutil pywin32
+
+      - name: Build Standalone Executable
+        run: |
+          pyinstaller --onefile --noconfirm --name SmartVisionAssistant_Standalone --add-data "model_files;model_files" --add-data "classes.txt;." simulate_pc.py
+
+      - name: Package Standalone App into Zip
+        run: |
+          Compress-Archive -Path dist\SmartVisionAssistant_Standalone.exe -DestinationPath dist\SmartVisionAssistant-Windows.zip -Force
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Smart Vision Assistant ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          body: |
+            # 🚀 Smart Vision Assistant Release ${{ github.ref_name }}
+
+            Real-time assistive vision and spatial audio navigation for visually impaired individuals.
+
+            ## 📦 Downloads for Windows Clients
+            - **`SmartVisionAssistant_Standalone.exe`**: Download and double-click to run. No Python, pip, or installation required!
+            - **`SmartVisionAssistant-Windows.zip`**: Compressed standalone package.
+
+            ## ✨ Features Included
+            - **Custom 92 Assistive Vision Classes**: Detects doors, stairs, potholes, vehicles, furniture, and navigation obstacles.
+            - **Directional Spoken Guidance**: Spoken navigation cues (*"Obstacle on the left, go straight or go right"*).
+            - **Virtual Simulator + Live Webcam**: Automatic fallback to simulated radar hallway scene if no physical webcam is plugged in.
+            - **Raspberry Pi 5 Edge AI**: Optimized OpenCV DNN pipeline achieving ~15-20 FPS on CPU.
+          files: |
+            dist/SmartVisionAssistant_Standalone.exe
+            dist/SmartVisionAssistant-Windows.zip
+          draft: false
+          prerelease: false
