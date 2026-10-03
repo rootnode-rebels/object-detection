@@ -8,6 +8,7 @@ echo   No Python Installation Required
 echo ============================================================
 echo.
 echo [INFO] Loading YOLOv8 AI Model and initializing camera...
+echo [INFO] Automatic voice navigation will speak when obstacles are detected.
 echo.
 
 "%~dp0SmartVisionAssistant.exe"

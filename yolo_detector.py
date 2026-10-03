@@ -236,11 +236,11 @@ def format_spatial_announcement(detections, distance_meters=None, target_zone=No
             return f"Path {label} is clear."
         names = " and ".join([it["class"] for it in items[:2]])
         if target_zone == "middle":
-            return f"Obstacle directly ahead: {names}{dist_str}. Step aside to the left or right."
+            return f"Obstacle directly ahead: {names}{dist_str}. Go right or go left."
         elif target_zone == "left":
-            return f"Obstacle on the left: {names}. Path ahead is clear, go straight or go right."
+            return f"Obstacle on the left: {names}. Go right."
         else:
-            return f"Obstacle on the right: {names}. Path ahead is clear, go straight or go left."
+            return f"Obstacle on the right: {names}. Go left."
 
     # 2. Comprehensive Navigation Guidance
     m_name = (" and ".join([it["class"] for it in zones["middle"][:2]])) if zones["middle"] else ("obstacle" if middle_proximity else None)
@@ -253,30 +253,35 @@ def format_spatial_announcement(detections, distance_meters=None, target_zone=No
 
     # Case B: Only Left has obstacle
     if has_left and not has_mid and not has_right:
-        return f"Obstacle on the left: {l_name}. Path ahead is clear, go straight or go right."
+        name_str = f": {l_name}" if l_name else ""
+        return f"Obstacle on the left{name_str}. Go right."
 
     # Case C: Only Right has obstacle
     if has_right and not has_mid and not has_left:
-        return f"Obstacle on the right: {r_name}. Path ahead is clear, go straight or go left."
+        name_str = f": {r_name}" if r_name else ""
+        return f"Obstacle on the right{name_str}. Go left."
 
     # Case D: Only Middle has obstacle (Sides are clear)
     if has_mid and not has_left and not has_right:
-        return f"Obstacle directly ahead: {m_name}{dist_str}. Go right or go left, sides are clear."
+        name_str = f": {m_name}" if m_name else ""
+        return f"Obstacle directly ahead{name_str}{dist_str}. Go right or go left."
 
     # Case E: Middle + Left blocked (Right is CLEAR)
     if has_mid and has_left and not has_right:
-        return f"Obstacle ahead and on the left: {m_name}. Go right, path is clear on the right."
+        name_str = f": {m_name}" if m_name else ""
+        return f"Obstacle ahead and on the left{name_str}. Go right."
 
     # Case F: Middle + Right blocked (Left is CLEAR)
     if has_mid and has_right and not has_left:
-        return f"Obstacle ahead and on the right: {m_name}. Go left, path is clear on the left."
+        name_str = f": {m_name}" if m_name else ""
+        return f"Obstacle ahead and on the right{name_str}. Go left."
 
     # Case G: Left + Right blocked, Middle is CLEAR
     if not has_mid and has_left and has_right:
-        return f"Obstacles on left ({l_name}) and right ({r_name}). Direct path is clear, go straight."
+        return f"Obstacles on left and right. Go straight, direct path is clear."
 
     # Case H: All three sectors blocked
-    return f"Obstacles detected ahead ({m_name}), left, and right. Path blocked, please stop."
+    return f"Obstacles ahead, left, and right. Path blocked, please stop."
 
 
 if __name__ == "__main__":

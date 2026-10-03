@@ -229,11 +229,12 @@ def main():
 
     # Simulation State
     distance_meters = 1.80
+    virtual_offset_x = 0  # Horizontal shift for simulated obstacle (-180 to +180)
     auto_walk = False
     walk_direction = -1  # moving closer
     last_scan_time = 0.0
     COOLDOWN = 3.0
-    current_announcement = "Simulation Ready. Press SPACE to query or W/S to adjust distance."
+    current_announcement = "Simulation Ready. Automatic obstacle detection active."
 
     voice.speak("Assistive vision simulation ready.")
 
@@ -244,10 +245,14 @@ def main():
     print("\n" + "=" * 65)
     print("  ASSISTIVE VISION PC SIMULATOR RUNNING")
     print(f"  Camera Mode : {'VIRTUAL SYNTHETIC SCENE' if virtual_cam else 'LIVE WEBCAM'}")
+    print("  Automatic Voice Guidance : ENABLED (speaks immediately when obstacle detected)")
     print("  Controls:")
     print("    [SPACE]     : Push Button Trigger (Manual Query)")
     print("    [W] / [UP]  : Move closer to obstacle")
     print("    [S] / [DOWN]: Move farther from obstacle")
+    print("    [J] / [LEFT]: Shift obstacle to LEFT")
+    print("    [K] / [RGHT]: Shift obstacle to RIGHT")
+    print("    [C]         : Center obstacle")
     print("    [A]         : Toggle Auto-walk radar simulation")
     print("    [Q] / [ESC] : Quit Simulation")
     print("=" * 65 + "\n")
@@ -269,13 +274,13 @@ def main():
                 cv2.line(frame, (200, 0), (200, 240), (40, 50, 65), 1)
                 cv2.line(frame, (440, 0), (440, 240), (40, 50, 65), 1)
 
-                # Simulated obstacle size inversely proportional to distance
+                # Simulated obstacle size and horizontal position
                 sc = max(0.4, min(1.8, (2.8 - distance_meters) / 1.4))
                 ow, oh = int(120 * sc), int(200 * sc)
-                ox, oy = int(320 - ow / 2), int(280 - oh / 2)
+                ox, oy = int((320 + virtual_offset_x) - ow / 2), int(280 - oh / 2)
                 cv2.rectangle(frame, (ox, oy), (ox + ow, oy + oh), (220, 100, 0), -1, cv2.LINE_AA)
                 cv2.rectangle(frame, (ox, oy), (ox + ow, oy + oh), (255, 180, 0), 2, cv2.LINE_AA)
-                cv2.putText(frame, "SIMULATED PERSON (WALKING AHEAD)", (ox - 20, max(20, oy - 10)),
+                cv2.putText(frame, "SIMULATED PERSON", (ox - 10, max(20, oy - 10)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1)
                 time.sleep(0.03)
 
@@ -317,6 +322,12 @@ def main():
                 distance_meters = max(0.2, distance_meters - 0.15)
             elif key in [ord('s'), ord('S'), 84]:  # S or DOWN arrow
                 distance_meters = min(3.0, distance_meters + 0.15)
+            elif key in [ord('j'), ord('J'), 81]:  # J or LEFT arrow
+                virtual_offset_x = max(-180, virtual_offset_x - 30)
+            elif key in [ord('k'), ord('K'), 83]:  # K or RIGHT arrow
+                virtual_offset_x = min(180, virtual_offset_x + 30)
+            elif key in [ord('c'), ord('C')]:  # C = Center
+                virtual_offset_x = 0
             elif key in [ord('a'), ord('A')]:  # Toggle auto-walk
                 auto_walk = not auto_walk
                 print(f"[SIM] Auto-walk mode: {'ENABLED' if auto_walk else 'DISABLED'}")
@@ -326,36 +337,58 @@ def main():
             if detector is not None:
                 detections = detector.detect(frame)
             if virtual_cam and len(detections) == 0:
+                sim_center_x = ox + ow // 2
+                if sim_center_x < 224:
+                    sim_zone = "left"
+                elif sim_center_x > 416:
+                    sim_zone = "right"
+                else:
+                    sim_zone = "middle"
+
                 detections = [{
                     "class": "person",
                     "confidence": 0.92,
                     "box": [ox, oy, ox + ow, oy + oh],
-                    "zone": "middle",
-                    "center": (ox + ow // 2, oy + oh // 2)
+                    "zone": sim_zone,
+                    "center": (sim_center_x, oy + oh // 2)
                 }]
 
-            # Trigger condition: Proximity < 1.0m OR Manual Button Trigger
+            # ---------------------------------------------
+            # AUTOMATIC REAL-TIME OBSTACLE VOICE GUIDANCE
+            # ---------------------------------------------
+            # Automatically speaks navigation commands whenever an obstacle is detected!
+            has_obstacle = (len(detections) > 0) or (distance_meters < 1.0)
             current_time = time.time()
-            if (distance_meters < 1.0 or manual_trigger) and (current_time - last_scan_time > COOLDOWN):
-                if target_sector:
-                    trigger_reason = f"Query {target_sector.upper()} Sector"
-                elif manual_trigger:
-                    trigger_reason = "Button Pressed (Full Spatial Scan)"
-                else:
-                    trigger_reason = f"Proximity Alert ({distance_meters:.2f}m)"
 
-                print(f"\n[TRIGGER] {trigger_reason}")
+            from yolo_detector import format_spatial_announcement
+            candidate_announcement = format_spatial_announcement(
+                detections,
+                distance_meters=distance_meters,
+                target_zone=target_sector
+            )
 
-                # Format spatial announcement across Left, Middle, and Right
-                from yolo_detector import format_spatial_announcement
-                current_announcement = format_spatial_announcement(
-                    detections,
-                    distance_meters=distance_meters,
-                    target_zone=target_sector
-                )
+            # Speak automatically on obstacle detection, zone change, or manual trigger
+            if has_obstacle or manual_trigger:
+                time_since = current_time - last_scan_time
+                state_changed = (candidate_announcement != current_announcement)
+                should_alert = manual_trigger or (state_changed and time_since > 1.5) or (time_since > COOLDOWN)
 
-                voice.speak(current_announcement)
-                last_scan_time = current_time
+                if should_alert:
+                    current_announcement = candidate_announcement
+                    if target_sector:
+                        trigger_reason = f"Query {target_sector.upper()} Sector"
+                    elif manual_trigger:
+                        trigger_reason = "Button Pressed (Manual Scan)"
+                    elif len(detections) > 0:
+                        obs_class = detections[0]['class']
+                        obs_zone = detections[0].get('zone', 'path')
+                        trigger_reason = f"Obstacle Alert: {obs_class} ({obs_zone.upper()})"
+                    else:
+                        trigger_reason = f"Proximity Alert ({distance_meters:.2f}m)"
+
+                    print(f"\n[TRIGGER] {trigger_reason} -> \"{current_announcement}\"")
+                    voice.speak(current_announcement)
+                    last_scan_time = current_time
 
             # ---------------------------------------------
             # DRAW TELEMETRY & SPATIAL HUD OVERLAY

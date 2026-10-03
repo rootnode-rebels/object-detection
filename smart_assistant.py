@@ -316,16 +316,21 @@ def main():
             distance_meters = get_distance()
             button_pressed = is_button_pressed()
 
-            # Trigger condition: Obstacle < 1m OR Button pressed
+            # Trigger condition: Obstacle detected in camera view OR distance < 1.0m OR Button pressed
+            has_obstacle = (len(detections) > 0) or (distance_meters < 1.0)
             time_since_last_alert = time.time() - last_scan_time
-            if (distance_meters < 1.0 or button_pressed) and (time_since_last_alert > COOLDOWN):
-                trigger_reason = "Button Pressed (Tactile Scan)" if button_pressed else f"Proximity Alert ({distance_meters:.2f}m)"
-                print(f"\n[TRIGGER] {trigger_reason}")
 
-                from yolo_detector import format_spatial_announcement
-                announcement = format_spatial_announcement(detections, distance_meters=distance_meters)
-                speak(announcement)
+            from yolo_detector import format_spatial_announcement
+            candidate_announcement = format_spatial_announcement(detections, distance_meters=distance_meters)
+            state_changed = (candidate_announcement != current_announcement) if 'current_announcement' in locals() else True
 
+            should_alert = button_pressed or (has_obstacle and (state_changed and time_since_last_alert > 1.5 or time_since_last_alert > COOLDOWN))
+
+            if should_alert:
+                current_announcement = candidate_announcement
+                trigger_reason = "Button Pressed (Tactile Scan)" if button_pressed else f"Obstacle Alert ({len(detections)} detected)"
+                print(f"\n[TRIGGER] {trigger_reason} -> \"{current_announcement}\"")
+                speak(current_announcement)
                 last_scan_time = time.time()
 
             # Graphical Telemetry Display
