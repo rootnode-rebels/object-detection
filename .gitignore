@@ -55,6 +55,7 @@ generate_*_pdf.py
 # Allow executable distribution (onedir package)
 !dist/**
 dist/*_Standalone.exe
+dist/*.zip
 dist/*.exe
 
 
