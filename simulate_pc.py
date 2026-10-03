@@ -111,13 +111,33 @@ class VoiceSynthesizer:
                     pass
 
 
+def get_resource_path(relative_path):
+    """Get absolute path to resource, works for source script and for PyInstaller frozen exe."""
+    # 1. PyInstaller bundled temp folder
+    if hasattr(sys, '_MEIPASS'):
+        p = os.path.join(sys._MEIPASS, relative_path)
+        if os.path.exists(p):
+            return p
+    # 2. Next to executable
+    exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+    p = os.path.join(exe_dir, relative_path)
+    if os.path.exists(p):
+        return p
+    # 3. Next to script file
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    p = os.path.join(script_dir, relative_path)
+    if os.path.exists(p):
+        return p
+    return relative_path
+
+
 # ==========================================
 # 2. PC SIMULATOR APPLICATION
 # ==========================================
 def main():
     parser = argparse.ArgumentParser(description="PC Simulator for Assistive Vision Device")
     parser.add_argument("--model", type=str, default=None, help="Path to custom ONNX model (optional)")
-    parser.add_argument("--classes", type=str, default="classes.txt", help="Path to classes.txt file")
+    parser.add_argument("--classes", type=str, default=None, help="Path to classes.txt file")
     parser.add_argument("--cam", type=int, default=0, help="Webcam device index (default: 0)")
     parser.add_argument("--resolution", type=int, default=320, help="Input resolution: 320 for high FPS")
     parser.add_argument("--conf", type=float, default=0.45, help="Confidence threshold (default: 0.45)")
@@ -125,12 +145,23 @@ def main():
 
     # Auto-detect assistive 92 model and classes
     model_to_use = args.model
-    if model_to_use is None and os.path.exists("model_files/yolov8_assistive_92.onnx"):
-        model_to_use = "model_files/yolov8_assistive_92.onnx"
+    if model_to_use is None:
+        for candidate in [
+            get_resource_path("model_files/yolov8_assistive_92.onnx"),
+            get_resource_path("model_files/yolov8n.onnx"),
+            "model_files/yolov8_assistive_92.onnx",
+            "model_files/yolov8n.onnx"
+        ]:
+            if os.path.exists(candidate):
+                model_to_use = candidate
+                break
 
     classes_file = args.classes
-    if (classes_file is None or not os.path.exists(classes_file)) and os.path.exists("classes.txt"):
-        classes_file = "classes.txt"
+    if classes_file is None or not os.path.exists(classes_file):
+        for candidate in [get_resource_path("classes.txt"), "classes.txt"]:
+            if os.path.exists(candidate):
+                classes_file = candidate
+                break
 
     # Load custom classes if available
     custom_classes = None

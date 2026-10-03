@@ -49,3 +49,4 @@ Thumbs.db
 *.pdf
 generate_*_pdf.py
 *.wav
+*.spec
