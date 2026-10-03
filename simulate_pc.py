@@ -24,6 +24,7 @@ import sys
 import threading
 import subprocess
 import argparse
+import tempfile
 import numpy as np
 
 # Ensure current directory is in sys.path
@@ -49,7 +50,7 @@ class VoiceSynthesizer:
     """Speaks text aloud using native OS speech engines without blocking the video stream."""
     def __init__(self):
         self.lock = threading.Lock()
-        self.temp_wav = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_temp_tts.wav")
+        self.temp_wav = os.path.join(tempfile.gettempdir(), "_smart_assistant_tts.wav")
         self._sapi_voice = None
         self._sapi_stream = None
         if sys.platform == "win32":
@@ -72,21 +73,28 @@ class VoiceSynthesizer:
             # Windows Native SAPI via SpFileStream + winsound
             if sys.platform == "win32":
                 clean_text = text.replace('"', '').replace("'", "")
-                # Method 1: SAPI stream to temp wav + winsound (tested 100% working on Windows)
+                # Method 1: SAPI stream to temp wav + winsound
+                try:
+                    import pythoncom
+                    pythoncom.CoInitialize()
+                except Exception:
+                    pass
                 try:
                     import winsound
-                    if self._sapi_voice and self._sapi_stream:
-                        self._sapi_stream.Open(self.temp_wav, 3, False)
-                        self._sapi_voice.AudioOutputStream = self._sapi_stream
-                        self._sapi_voice.Speak(clean_text)
-                        self._sapi_stream.Close()
-                        winsound.PlaySound(self.temp_wav, winsound.SND_FILENAME)
-                        try:
-                            if os.path.exists(self.temp_wav):
-                                os.remove(self.temp_wav)
-                        except Exception:
-                            pass
-                        return
+                    import win32com.client
+                    voice = win32com.client.Dispatch("SAPI.SpVoice")
+                    stream = win32com.client.Dispatch("SAPI.SpFileStream")
+                    stream.Open(self.temp_wav, 3, False)
+                    voice.AudioOutputStream = stream
+                    voice.Speak(clean_text)
+                    stream.Close()
+                    winsound.PlaySound(self.temp_wav, winsound.SND_FILENAME)
+                    try:
+                        if os.path.exists(self.temp_wav):
+                            os.remove(self.temp_wav)
+                    except Exception:
+                        pass
+                    return
                 except Exception:
                     pass
 
@@ -195,7 +203,11 @@ def main():
 
     # Initialize Webcam with Virtual Camera Fallback
     print(f"[INFO] Opening webcam device {args.cam}...")
-    cap = cv2.VideoCapture(args.cam)
+    cap = None
+    if sys.platform == "win32":
+        cap = cv2.VideoCapture(args.cam, cv2.CAP_DSHOW)
+    if cap is None or not cap.isOpened():
+        cap = cv2.VideoCapture(args.cam)
     virtual_cam = False
 
     if not cap.isOpened():
@@ -205,6 +217,15 @@ def main():
     else:
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+
+    # Prepare Display Window & Bring to Front
+    WINDOW_TITLE = "Smart Vision Assistant - PC Simulator"
+    cv2.namedWindow(WINDOW_TITLE, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(WINDOW_TITLE, 960, 720)
+    try:
+        cv2.setWindowProperty(WINDOW_TITLE, cv2.WND_PROP_TOPMOST, 1)
+    except Exception:
+        pass
 
     # Simulation State
     distance_meters = 1.80
@@ -304,6 +325,14 @@ def main():
             detections = []
             if detector is not None:
                 detections = detector.detect(frame)
+            if virtual_cam and len(detections) == 0:
+                detections = [{
+                    "class": "person",
+                    "confidence": 0.92,
+                    "box": [ox, oy, ox + ow, oy + oh],
+                    "zone": "middle",
+                    "center": (ox + ow // 2, oy + oh // 2)
+                }]
 
             # Trigger condition: Proximity < 1.0m OR Manual Button Trigger
             current_time = time.time()
@@ -404,7 +433,7 @@ def main():
             cv2.putText(frame, f"VOICE: \"{current_announcement}\"",
                         (15, h - 16), cv2.FONT_HERSHEY_SIMPLEX, 0.46, (0, 255, 180), 1)
 
-            cv2.imshow("Smart Vision Assistant - PC Simulator", frame)
+            cv2.imshow(WINDOW_TITLE, frame)
 
     except KeyboardInterrupt:
         pass
