@@ -52,6 +52,9 @@ generate_*_pdf.py
 *.wav
 *.spec
 
-# Allow executable distribution
+# Allow executable distribution (onedir package)
 !dist/**
+dist/*_Standalone.exe
+dist/*.exe
+
 
