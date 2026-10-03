@@ -44,18 +44,50 @@ class VoiceSynthesizer:
     """Speaks text aloud using native OS speech engines without blocking the video stream."""
     def __init__(self):
         self.lock = threading.Lock()
+        self.temp_wav = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_temp_tts.wav")
+        self._sapi_voice = None
+        self._sapi_stream = None
+        if sys.platform == "win32":
+            try:
+                import win32com.client
+                self._sapi_voice = win32com.client.Dispatch("SAPI.SpVoice")
+                self._sapi_stream = win32com.client.Dispatch("SAPI.SpFileStream")
+            except Exception:
+                pass
 
     def speak(self, text):
         threading.Thread(target=self._speak_worker, args=(text,), daemon=True).start()
 
     def _speak_worker(self, text):
         with self.lock:
-            print(f"🔊 SPEAKING: {text}")
-            # Windows Native SAPI (zero dependencies)
+            try:
+                print(f"[VOICE] SPEAKING: {text}")
+            except Exception:
+                pass
+            # Windows Native SAPI via SpFileStream + winsound
             if sys.platform == "win32":
                 clean_text = text.replace('"', '').replace("'", "")
-                ps_cmd = f'(New-Object -ComObject SAPI.SpVoice).Speak("{clean_text}")'
+                # Method 1: SAPI stream to temp wav + winsound (tested 100% working on Windows)
                 try:
+                    import winsound
+                    if self._sapi_voice and self._sapi_stream:
+                        self._sapi_stream.Open(self.temp_wav, 3, False)
+                        self._sapi_voice.AudioOutputStream = self._sapi_stream
+                        self._sapi_voice.Speak(clean_text)
+                        self._sapi_stream.Close()
+                        winsound.PlaySound(self.temp_wav, winsound.SND_FILENAME)
+                        try:
+                            if os.path.exists(self.temp_wav):
+                                os.remove(self.temp_wav)
+                        except Exception:
+                            pass
+                        return
+                except Exception:
+                    pass
+
+                # Method 2: Fallback powershell System.Speech
+                try:
+                    ps_cmd = f"Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; $s.Speak('{clean_text}')"
                     subprocess.run(["powershell", "-NoProfile", "-Command", ps_cmd],
                                    capture_output=True, timeout=5)
                     return

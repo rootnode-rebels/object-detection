@@ -101,11 +101,54 @@ def get_cpu_utilization():
 # 2. TEXT-TO-SPEECH (NON-BLOCKING)
 # ==========================================
 tts_process = None
+_sapi_voice = None
+_sapi_stream = None
+
+if sys.platform == "win32":
+    try:
+        import win32com.client
+        _sapi_voice = win32com.client.Dispatch("SAPI.SpVoice")
+        _sapi_stream = win32com.client.Dispatch("SAPI.SpFileStream")
+    except Exception:
+        pass
 
 def speak(text):
     """Speaks text asynchronously using espeak (Linux/Pi) or native OS speech without blocking."""
-    global tts_process
-    print(f"🔊 SPEAKING: {text}")
+    global tts_process, _sapi_voice, _sapi_stream
+    try:
+        print(f"[VOICE] SPEAKING: {text}")
+    except Exception:
+        pass
+
+    if sys.platform == "win32":
+        def _win_speak():
+            clean_text = text.replace('"', '').replace("'", "")
+            temp_wav = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_temp_assistant_tts.wav")
+            try:
+                import winsound
+                if _sapi_voice and _sapi_stream:
+                    _sapi_stream.Open(temp_wav, 3, False)
+                    _sapi_voice.AudioOutputStream = _sapi_stream
+                    _sapi_voice.Speak(clean_text)
+                    _sapi_stream.Close()
+                    winsound.PlaySound(temp_wav, winsound.SND_FILENAME)
+                    try:
+                        if os.path.exists(temp_wav):
+                            os.remove(temp_wav)
+                    except Exception:
+                        pass
+                    return
+            except Exception:
+                pass
+
+            try:
+                ps_cmd = f"Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; $s.Speak('{clean_text}')"
+                subprocess.run(["powershell", "-NoProfile", "-Command", ps_cmd], capture_output=True, timeout=5)
+            except Exception:
+                pass
+
+        threading.Thread(target=_win_speak, daemon=True).start()
+        return
 
     if tts_process is not None:
         try:
@@ -117,16 +160,7 @@ def speak(text):
     try:
         tts_process = subprocess.Popen(['espeak', '-ven+f3', '-s155', text])
     except FileNotFoundError:
-        # Cross-platform fallback for Windows and macOS
-        if sys.platform == "win32":
-            clean_text = text.replace('"', '').replace("'", "")
-            ps_cmd = f'(New-Object -ComObject SAPI.SpVoice).Speak("{clean_text}")'
-            try:
-                tts_process = subprocess.Popen(["powershell", "-NoProfile", "-Command", ps_cmd])
-                return
-            except Exception:
-                pass
-        elif sys.platform == "darwin":
+        if sys.platform == "darwin":
             try:
                 tts_process = subprocess.Popen(["say", text])
                 return

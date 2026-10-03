@@ -204,66 +204,79 @@ class YOLODetector:
 
 def format_spatial_announcement(detections, distance_meters=None, target_zone=None):
     """
-    Constructs natural, comprehensive spatial voice feedback (Left, Middle, Right)
-    for visually impaired navigation.
+    Constructs actionable spatial navigation voice guidance for visually impaired navigation:
+    Tells the user WHAT obstacle is detected, WHERE it is, and WHICH DIRECTION to move.
     
     :param detections: List of detection dictionaries from YOLODetector.detect()
     :param distance_meters: Optional ultrasonic distance reading in meters
     :param target_zone: Optional filter ('left', 'middle', 'right') for targeted sector queries
     """
-    if not detections:
-        if distance_meters is not None and distance_meters < 1.0:
-            return f"Obstacle in the middle at {distance_meters:.1f} meters. Please stop or step aside."
-        return "Path clear ahead. No obstacles detected."
-
     # Group unique object labels by zone
     zones = {"middle": [], "left": [], "right": []}
-    for d in detections:
+    for d in (detections or []):
         z = d.get("zone", "middle")
         if z in zones and d["class"] not in [item["class"] for item in zones[z]]:
             zones[z].append(d)
 
-    # 1. Targeted single-sector query (e.g. user pressed [L], [M], or [R])
+    # Consider middle blocked if ultrasonic distance is under 1.0m
+    middle_proximity = (distance_meters is not None and distance_meters < 1.0)
+    has_mid = bool(zones["middle"]) or middle_proximity
+    has_left = bool(zones["left"])
+    has_right = bool(zones["right"])
+
+    dist_str = f" at {distance_meters:.1f} meters" if (distance_meters is not None and distance_meters <= 3.0) else ""
+
+    # 1. Single-sector targeted query ([L], [M], [R])
     if target_zone:
+        label = "in the middle" if target_zone == "middle" else f"on the {target_zone}"
         items = zones.get(target_zone, [])
-        label = "in the middle" if target_zone == "middle" else f"on your {target_zone}"
+        if target_zone == "middle" and middle_proximity and not items:
+            return f"Obstacle directly ahead{dist_str}. Step aside to the left or right."
         if not items:
-            return f"No objects detected {label}."
+            return f"Path {label} is clear."
         names = " and ".join([it["class"] for it in items[:2]])
-        if distance_meters is not None and distance_meters <= 3.0:
-            return f"{names.capitalize()} detected {label} at {distance_meters:.1f} meters."
-        return f"{names.capitalize()} detected {label}."
-
-    # 2. Comprehensive multi-zone spatial announcement
-    phrases = []
-
-    # Priority 1: Middle / Center (Direct walking path of the user)
-    if zones["middle"]:
-        m_names = " and ".join([it["class"] for it in zones["middle"][:2]])
-        if distance_meters is not None and distance_meters <= 3.0:
-            phrases.append(f"In the middle: {m_names} at {distance_meters:.1f} meters")
+        if target_zone == "middle":
+            return f"Obstacle directly ahead: {names}{dist_str}. Step aside to the left or right."
+        elif target_zone == "left":
+            return f"Obstacle on the left: {names}. Path ahead is clear, go straight or go right."
         else:
-            phrases.append(f"In the middle: {m_names}")
-    elif distance_meters is not None and distance_meters < 1.0:
-        phrases.append(f"Obstacle in the middle at {distance_meters:.1f} meters")
+            return f"Obstacle on the right: {names}. Path ahead is clear, go straight or go left."
 
-    # Priority 2: Left sector
-    if zones["left"]:
-        l_names = " and ".join([it["class"] for it in zones["left"][:2]])
-        phrases.append(f"On your left: {l_names}")
+    # 2. Comprehensive Navigation Guidance
+    m_name = (" and ".join([it["class"] for it in zones["middle"][:2]])) if zones["middle"] else ("obstacle" if middle_proximity else None)
+    l_name = (" and ".join([it["class"] for it in zones["left"][:2]])) if zones["left"] else None
+    r_name = (" and ".join([it["class"] for it in zones["right"][:2]])) if zones["right"] else None
 
-    # Priority 3: Right sector
-    if zones["right"]:
-        r_names = " and ".join([it["class"] for it in zones["right"][:2]])
-        phrases.append(f"On your right: {r_names}")
+    # Case A: Entire path is clear
+    if not has_mid and not has_left and not has_right:
+        return "Path clear ahead. Continue straight."
 
-    if phrases:
-        return ". ".join(phrases) + "."
+    # Case B: Only Left has obstacle
+    if has_left and not has_mid and not has_right:
+        return f"Obstacle on the left: {l_name}. Path ahead is clear, go straight or go right."
 
-    if distance_meters is not None and distance_meters < 1.0:
-        return f"Warning: obstacle detected at {distance_meters:.1f} meters."
+    # Case C: Only Right has obstacle
+    if has_right and not has_mid and not has_left:
+        return f"Obstacle on the right: {r_name}. Path ahead is clear, go straight or go left."
 
-    return "Path clear ahead."
+    # Case D: Only Middle has obstacle (Sides are clear)
+    if has_mid and not has_left and not has_right:
+        return f"Obstacle directly ahead: {m_name}{dist_str}. Go right or go left, sides are clear."
+
+    # Case E: Middle + Left blocked (Right is CLEAR)
+    if has_mid and has_left and not has_right:
+        return f"Obstacle ahead and on the left: {m_name}. Go right, path is clear on the right."
+
+    # Case F: Middle + Right blocked (Left is CLEAR)
+    if has_mid and has_right and not has_left:
+        return f"Obstacle ahead and on the right: {m_name}. Go left, path is clear on the left."
+
+    # Case G: Left + Right blocked, Middle is CLEAR
+    if not has_mid and has_left and has_right:
+        return f"Obstacles on left ({l_name}) and right ({r_name}). Direct path is clear, go straight."
+
+    # Case H: All three sectors blocked
+    return f"Obstacles detected ahead ({m_name}), left, and right. Path blocked, please stop."
 
 
 if __name__ == "__main__":

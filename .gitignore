@@ -48,3 +48,4 @@ Thumbs.db
 # Generated documentation & local PDFs
 *.pdf
 generate_*_pdf.py
+*.wav
