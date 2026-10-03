@@ -140,54 +140,48 @@ graph TD
 ```mermaid
 flowchart TD
     subgraph Initialization ["1. System Boot & Initialization"]
-        INIT_START(["System Start"]) --> YOLO_INIT["Download & Load YOLOv8n ONNX Model"]
-        YOLO_INIT --> CAM_INIT["Start ThreadedCameraStream Background Thread"]
-        CAM_INIT --> GPIO_INIT["Initialize GPIO: DistanceSensor & Button"]
-        GPIO_INIT --> READY_VOICE["Speak: AI vision system ready"]
+        INIT_START(["System Start"]) --> MODEL_INIT["Auto-Detect & Load Model<br/>(92-Class Assistive / COCO-80 ONNX)"]
+        MODEL_INIT --> CAM_INIT["Start ThreadedCameraStream Background Thread"]
+        CAM_INIT --> SENSOR_INIT["Initialize GPIO: HC-SR04 & Tactile Button"]
+        SENSOR_INIT --> READY_VOICE["Speak: AI vision system ready<br/>(Non-blocking cross-platform TTS)"]
     end
 
-    subgraph Streaming ["2. Continuous Video Pipeline"]
-        CAM_INIT -.-> CAM_LOOP["Threaded Camera Capture Loop"]
-        CAM_LOOP -->|"Read Live Frame"| BUFFER["Thread-Safe Frame Buffer"]
-        BUFFER -.->|"Latest Live Frame"| CPU_INFER
+    subgraph Video_Inference ["2. Continuous Video & CPU Inference Pipeline"]
+        READY_VOICE --> FRAME_LOOP["Read Frame from Buffer-Free Stream"]
+        FRAME_LOOP --> BLOB_NORM["Normalize Blob (320x320 / 640x640)"]
+        BLOB_NORM --> CPU_FORWARD["OpenCV DNN Forward Pass (ARM NEON / SIMD)"]
+        CPU_FORWARD --> NMS_FILTER["Vectorized NMS Candidate Extraction"]
+        NMS_FILTER --> SPATIAL_PARTITION["Multi-Sector Spatial Partitioning<br/>Left (<35%) | Middle (35-65%) | Right (>65%)"]
     end
 
-    subgraph Polling ["3. Sensor Polling Loop (Every 100ms)"]
-        READY_VOICE --> LOOP_START["Poll Distance & Button State"]
-        LOOP_START --> READ_SENSORS["Read get_distance and is_button_pressed"]
-        READ_SENSORS --> TRIGGER_CHECK{"Trigger Condition Met?<br/>Distance under 1.0m OR Button Pressed<br/>AND Cooldown over 3.0s"}
+    subgraph Trigger_Eval ["3. Proximity & Trigger Evaluation"]
+        SPATIAL_PARTITION --> POLL_SENSORS["Poll HC-SR04 Distance & Button / Sector Hotkeys"]
+        POLL_SENSORS --> CHECK_TRIGGER{"Trigger Condition Met?<br/>Obstacle < 1.0m OR Button / Hotkey Pressed<br/>AND Cooldown > 3.0s"}
     end
 
-    TRIGGER_CHECK -- No --> LOOP_START
-
-    subgraph AI_Inference ["4. CPU YOLOv8 Object Detection"]
-        TRIGGER_CHECK -- Yes --> GRAB_FRAME["Fetch Freshest Frame from Buffer"]
-        GRAB_FRAME --> RESIZE["Normalize Blob to 320x320 or 640x640"]
-        RESIZE --> CPU_INFER["Run OpenCV DNN Forward Pass on CPU"]
-        CPU_INFER --> NMS["Vectorized NMS Candidate Extraction"]
-        NMS --> FILTER_CONF{"Any Detection over 50% Confidence?"}
+    subgraph Audio_Feedback ["4. Prioritized Spatial Audio Alerts"]
+        CHECK_TRIGGER -- Yes --> FORMAT_SPEECH["Construct Prioritized Spatial Announcement<br/>(format_spatial_announcement)"]
+        FORMAT_SPEECH --> PRIORITY_DIR{"Direct Path (Middle) Obstacle?"}
+        PRIORITY_DIR -- Yes --> ANNOUNCE_MID["Announce High-Priority Middle Hazard First<br/>'Directly ahead: [object] at [dist]m'"]
+        PRIORITY_DIR -- No / Next --> ANNOUNCE_SIDES["Announce Flanking Objects<br/>'To your left: [item], on your right: [item]'"]
+        ANNOUNCE_MID --> TTS_ASYNC["Non-Blocking Voice Synthesis<br/>(espeak / Windows SAPI / macOS say)"]
+        ANNOUNCE_SIDES --> TTS_ASYNC
+        TTS_ASYNC --> RESET_COOLDOWN["Reset 3.0s Cooldown Timer"]
     end
 
-    subgraph Audio_Feedback ["5. Spatial Awareness & Voice Output"]
-        FILTER_CONF -- Yes --> CALC_DIR["Calculate Spatial Direction:<br/>Left / Straight Ahead / Right"]
-        CALC_DIR --> FORMAT_ALERT["Format Speech: Object detected (Direction) at (Distance)m"]
-        FILTER_CONF -- No --> FORMAT_GENERIC["Format Speech: Obstacle ahead, cannot identify object"]
-        FORMAT_ALERT --> SPEAK_ASYNC["Speak Asynchronously via espeak"]
-        FORMAT_GENERIC --> SPEAK_ASYNC
+    subgraph Telemetry_HUD ["5. Real-Time Telemetry & Sector HUD"]
+        CHECK_TRIGGER -- No --> DRAW_HUD
+        RESET_COOLDOWN --> DRAW_HUD["Draw Sector Divider Lines & Color-Coded Bounding Boxes<br/>(Middle: Orange/Red | Left: Yellow | Right: Green)"]
+        DRAW_HUD --> RENDER_STATS["Render Telemetry HUD (FPS, CPU %, Distance, Sector Status)"]
+        RENDER_STATS --> LOOP_CONT{"Next Frame?"}
+        LOOP_CONT -- Yes --> FRAME_LOOP
     end
 
-    subgraph Telemetry ["6. Real-Time HUD Overlay & Display"]
-        SPEAK_ASYNC --> OVERLAY["Render Bounding Boxes + Direction Labels"]
-        OVERLAY --> HUD["Display Live FPS, CPU Load %, and Distance"]
-        HUD --> RESET_TIMER["Reset 3.0s Cooldown Timer"]
-        RESET_TIMER --> LOOP_START
-    end
-
-    subgraph Teardown ["7. Safe Shutdown"]
-        LOOP_START -.->|"SIGINT / Ctrl+C"| CLEANUP["Release Camera Stream"]
-        CLEANUP --> CLOSE_NET["Release DNN Model"]
-        CLOSE_NET --> CLOSE_GPIO["Close GPIO Handles & Terminate TTS"]
-        CLOSE_GPIO --> EXIT(["System Safely Halted"])
+    subgraph Teardown ["6. Safe System Shutdown"]
+        LOOP_CONT -.->|"SIGINT / Ctrl+C / [Q]"| STOP_STREAM["Stop Camera Stream"]
+        STOP_STREAM --> RELEASE_DNN["Release OpenCV DNN Engine"]
+        RELEASE_DNN --> CLOSE_SENSORS["Close GPIO Handles & Terminate TTS"]
+        CLOSE_SENSORS --> EXIT_DONE(["System Safely Halted"])
     end
 ```
 
