@@ -2,7 +2,10 @@
 
 A real-time object detection and smart vision assistant engineered for **Raspberry Pi 5** using a CPU-optimized **YOLOv8** architecture (no dedicated NPU or AI HAT required).
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/rootnode-rebels/ai-object-detection/blob/main/Build_Assistive_92_Model.ipynb)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20Pi%205-brightgreen.svg)]()
+[![Model](https://img.shields.io/badge/YOLOv8-92%20Assistive%20Classes-orange.svg)]()
+[![Standalone](https://img.shields.io/badge/App-Standalone%20Windows%20EXE-blueviolet.svg)]()
 
 ---
 
@@ -291,7 +294,6 @@ The custom-trained assistive model detects 92 essential indoor, outdoor, and haz
 ├── smart_assistant.py          # Main real-time Raspberry Pi 5 assistant & HUD
 ├── yolo_detector.py            # CPU-optimized YOLOv8 inference & spatial engine
 ├── build_assistive_model.py    # Zero-shot CLIP encoder for custom classes
-├── Build_Assistive_92_Model.ipynb # Google Colab notebook to generate 92-class ONNX model
 ├── train_custom_yolo.py        # Custom YOLOv8 training and ONNX export pipeline
 ├── classes.txt                 # List of 92 assistive object classes
 ├── benchmark_performance.py    # Performance & thermal benchmarking tool
