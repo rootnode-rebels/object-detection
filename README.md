@@ -189,15 +189,28 @@ flowchart TD
 
 ## ⚡ Installation & Quick Start
 
-### Option A: Local PC Simulation (Windows / Mac / Linux)
-You can test the entire pipeline on your PC with your webcam, simulated distance sensor, and native voice synthesis:
+### Option A: Windows Standalone App (Zero Python Required)
+For clients and users who want to run the application immediately without installing Python or any libraries:
 
-1. **1-Click Launchers (Windows):**
-   * `run_pc_demo.bat` : Launches the full webcam + 92-class AI simulator with real-time HUD and audio.
-   * `run_benchmark.bat` : Runs a 100-frame hardware & AI inference benchmark.
-   * `run_web_simulator.bat` : Opens the interactive browser-based hardware simulator.
+1. Go to the project root and double-click:
+   * **`run_exe.bat`** (or open `dist\SmartVisionAssistant\SmartVisionAssistant.exe`)
+2. The standalone app launches with the pre-compiled YOLOv8 92-class model, real-time spatial vision HUD, and native spoken navigation audio alerts out of the box.
 
-2. **Manual Command:**
+---
+
+### Option B: Local PC Simulation via Python (Windows / Mac / Linux)
+If running from source code:
+
+1. **Install Modules (1-Click for Windows):**
+   * Double-click **`install_modules.bat`** to automatically download and install all required modules (`opencv-python`, `numpy`, `pywin32`, etc.).
+   * Or run manually: `pip install -r requirements.txt`
+
+2. **1-Click Launchers (Windows):**
+   * **`run_pc_demo.bat`** : Automatically checks/installs dependencies and launches the full webcam + 92-class AI simulator with real-time HUD and audio.
+   * **`run_benchmark.bat`** : Runs a 100-frame hardware & AI inference benchmark.
+   * **`run_web_simulator.bat`** : Opens the interactive browser-based hardware simulator.
+
+3. **Manual Command:**
    ```bash
    python simulate_pc.py --model model_files/yolov8_assistive_92.onnx --classes classes.txt --resolution 320
    ```
@@ -211,12 +224,12 @@ You can test the entire pipeline on your PC with your webcam, simulated distance
    * `[A]` : Toggle Auto-walk radar oscillation mode
    * `[Q]` / `[ESC]` : Exit simulation
 
-3. **Interactive Hardware Web Simulator:**
+4. **Interactive Hardware Web Simulator:**
    Open `simulation.html` in any web browser to interactively test the ultrasonic radar, push button, spatial sector HUD, and voice synthesis in a GUI environment.
 
 ---
 
-### Option B: Physical Raspberry Pi 5 Deployment
+### Option C: Physical Raspberry Pi 5 Deployment
 
 #### 1. Install System Dependencies
 On Raspberry Pi OS (Bookworm):
@@ -267,7 +280,10 @@ The custom-trained assistive model detects 92 essential indoor, outdoor, and haz
 ## 📁 Repository Structure
 
 ```text
-├── run_pc_demo.bat             # 1-Click Windows PC simulation launcher
+├── dist/SmartVisionAssistant/  # Standalone Windows executable distribution
+├── run_exe.bat                 # 1-Click launcher for standalone executable
+├── install_modules.bat         # 1-Click module installer for clients
+├── run_pc_demo.bat             # 1-Click Windows PC simulation launcher (auto-installs missing modules)
 ├── run_benchmark.bat           # 1-Click Windows AI & CPU benchmark tool
 ├── run_web_simulator.bat       # 1-Click launcher for interactive web simulation
 ├── simulate_pc.py              # Native PC simulation & CV demo with speech
