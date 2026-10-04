@@ -202,4 +202,14 @@ The following audit deliverables are saved in the project repository:
 - [x] **Phase 2 (P2) [RESOLVED]**: Added SHA-256 cryptographic model verification in [`yolo_detector.py`](file:///d:/Projects/SSIT/AI%20hat/yolo_detector.py#L35).
 - [x] **Phase 3 (P3) [RESOLVED]**: Corrected repository links across [`README.md`](file:///d:/Projects/SSIT/AI%20hat/README.md), [`SETUP_GUIDE.md`](file:///d:/Projects/SSIT/AI%20hat/SETUP_GUIDE.md), and [`Build_Assistive_92_Model.ipynb`](file:///d:/Projects/SSIT/AI%20hat/Build_Assistive_92_Model.ipynb).
 - [x] **Phase 3 (P3) [RESOLVED]**: Untracked 285 MB `dist/` directory from Git tracking and updated [`.gitignore`](file:///d:/Projects/SSIT/AI%20hat/.gitignore).
+ 
+---
+ 
+## 9. Release History & Remote Git Synchronization
+
+| Release Version | Git Commit | Release Scope & Milestone | Status |
+| :--- | :--- | :--- | :--- |
+| **v1.1.0** | `de00aef` | Full codebase audit remediation (F-01 through F-07), vectorized YOLO post-processing (<1.5ms), thread-safe SAPI speech with queue purging, SHA-256 model verification, and 285 MB binary untracking. | **PUBLISHED** |
+| **v1.0.0** | `4474e2f` | Initial autonomous voice guidance release with standalone Windows executable packaging. | **PUBLISHED** |
+
 
