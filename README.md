@@ -5,8 +5,8 @@ A real-time object detection and smart vision assistant engineered for **Raspber
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20Pi%205-brightgreen.svg)]()
 [![Model](https://img.shields.io/badge/YOLOv8-92%20Assistive%20Classes-orange.svg)]()
-[![Standalone](https://img.shields.io/badge/App-Standalone%20Windows%20EXE-blueviolet.svg)](https://github.com/rootnode-rebels/ai-object-detection/releases/tag/v1.0.0)
-[![GitHub Release](https://img.shields.io/badge/Release-v1.0.0%20(Autonomous%20Voice)-success.svg)](https://github.com/rootnode-rebels/ai-object-detection/releases/tag/v1.0.0)
+[![Standalone](https://img.shields.io/badge/App-Standalone%20Windows%20EXE-blueviolet.svg)](https://github.com/rootnode-rebels/object-detection/releases/latest)
+[![GitHub Release](https://img.shields.io/badge/Release-v1.1.0%20(Audited%20%26%20Vectorized)-success.svg)](https://github.com/rootnode-rebels/object-detection/releases/tag/v1.1.0)
 
 ---
 
@@ -14,9 +14,9 @@ A real-time object detection and smart vision assistant engineered for **Raspber
 
 Clients and testers can download and run the standalone application without needing Python or manual setup:
 
-* 📦 **[Direct Download: `SmartVisionAssistant_Standalone.exe`](https://github.com/rootnode-rebels/ai-object-detection/releases/download/v1.0.0/SmartVisionAssistant_Standalone.exe)** *(~114 MB single self-extracting executable)*
-* 🗜️ **[Direct Download: `SmartVisionAssistant-Windows.zip`](https://github.com/rootnode-rebels/ai-object-detection/releases/download/v1.0.0/SmartVisionAssistant-Windows.zip)** *(Portable ZIP with launcher and quickstart guide)*
-* 🏷️ **[View GitHub Release v1.0.0](https://github.com/rootnode-rebels/ai-object-detection/releases/tag/v1.0.0)**
+* 📦 **[Direct Download: `SmartVisionAssistant_Standalone.exe`](https://github.com/rootnode-rebels/object-detection/releases/download/v1.1.0/SmartVisionAssistant_Standalone.exe)** *(~114 MB single self-extracting executable)*
+* 🗜️ **[Direct Download: `SmartVisionAssistant-Windows.zip`](https://github.com/rootnode-rebels/object-detection/releases/download/v1.1.0/SmartVisionAssistant-Windows.zip)** *(Portable ZIP with launcher and quickstart guide)*
+* 🏷️ **[View GitHub Release v1.1.0](https://github.com/rootnode-rebels/object-detection/releases/tag/v1.1.0)**
 
 ---
 

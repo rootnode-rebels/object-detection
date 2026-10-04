@@ -36,8 +36,8 @@ sudo apt install python3-opencv python3-gpiozero python3-psutil python3-numpy es
 ### Step 1: Clone or Copy Project Files
 ```bash
 cd ~
-git clone https://github.com/rootnode-rebels/ai-object-detection.git
-cd ai-object-detection
+git clone https://github.com/rootnode-rebels/object-detection.git
+cd object-detection
 ```
 
 ### Step 2: Install Python Dependencies
@@ -55,8 +55,8 @@ To enable detection and voice announcements for all **92 custom objects** (stair
 1. Open a new notebook at [Google Colab](https://colab.research.google.com).
 2. Paste and run this single code block:
 ```python
-!git clone https://github.com/rootnode-rebels/ai-object-detection.git
-%cd ai-object-detection
+!git clone https://github.com/rootnode-rebels/object-detection.git
+%cd object-detection
 !pip install ultralytics onnx
 !python build_assistive_model.py --mode yoloworld --imgsz 320
 

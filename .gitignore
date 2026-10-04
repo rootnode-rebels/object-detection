@@ -5,8 +5,8 @@ __pycache__/
 *.so
 .Python
 build/
-# Allow standalone executable release distribution
-!dist/**
+# Distribution artifacts (Fix for Finding F-07: Ignore dist/ to keep git repo lightweight)
+dist/
 
 eggs/
 .eggs/
@@ -51,11 +51,7 @@ Thumbs.db
 generate_*_pdf.py
 *.wav
 *.spec
-
-# Allow executable distribution (onedir package)
-!dist/**
-dist/*_Standalone.exe
-dist/*.zip
-dist/*.exe
+*.zip
+*.exe
 
 

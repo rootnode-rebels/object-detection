@@ -8,6 +8,7 @@ import os
 import sys
 import time
 import urllib.request
+import hashlib
 import numpy as np
 import cv2
 
@@ -32,19 +33,39 @@ CLASSES_TXT_PATH = "classes.txt"
 YOLO_ONNX_URL = "https://github.com/ultralytics/assets/releases/download/v8.2.0/yolov8n.onnx"
 
 
-def download_yolo_onnx(target_path=YOLO_ONNX_PATH):
-    """Downloads the official YOLOv8n ONNX model (~12MB) if not present."""
+YOLO_ONNX_SHA256 = "cc08cf9fa1f18cabd30089fa82564a4ec657f8868adc58a60db8d35306fc59bc"
+
+
+def verify_file_sha256(file_path, expected_hash):
+    """Computes SHA-256 checksum and compares against expected hash."""
+    if not os.path.exists(file_path):
+        return False
+    hasher = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        while True:
+            chunk = f.read(65536)
+            if not chunk:
+                break
+            hasher.update(chunk)
+    return hasher.hexdigest().lower() == expected_hash.lower()
+
+
+def download_yolo_onnx(target_path=YOLO_ONNX_PATH, expected_hash=YOLO_ONNX_SHA256):
+    """Downloads the official YOLOv8n ONNX model (~12MB) with SHA-256 integrity verification (Fix for Finding F-05)."""
     if not os.path.exists(MODEL_DIR):
         os.makedirs(MODEL_DIR, exist_ok=True)
 
     if os.path.exists(target_path) and os.path.getsize(target_path) > 10_000_000:
-        return target_path
+        if expected_hash is None or verify_file_sha256(target_path, expected_hash):
+            return target_path
+        print(f"[WARNING] Local model hash mismatch or corruption detected. Re-downloading...")
 
     print(f"[INFO] Downloading official YOLOv8n ONNX model (~12MB)...")
     temp_path = target_path + ".tmp"
     headers = {"User-Agent": "Mozilla/5.0"}
     req = urllib.request.Request(YOLO_ONNX_URL, headers=headers)
 
+    hasher = hashlib.sha256()
     with urllib.request.urlopen(req, timeout=90) as response, open(temp_path, "wb") as f:
         chunk_size = 64 * 1024
         while True:
@@ -52,11 +73,20 @@ def download_yolo_onnx(target_path=YOLO_ONNX_PATH):
             if not chunk:
                 break
             f.write(chunk)
+            hasher.update(chunk)
+
+    downloaded_hash = hasher.hexdigest().lower()
+    if expected_hash and downloaded_hash != expected_hash.lower():
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        raise ValueError(
+            f"Security Error: Downloaded model SHA-256 mismatch! Expected {expected_hash}, got {downloaded_hash}."
+        )
 
     if os.path.exists(target_path):
         os.remove(target_path)
     os.rename(temp_path, target_path)
-    print(f"[INFO] YOLOv8n ONNX model saved to {target_path} ({os.path.getsize(target_path):,} bytes)")
+    print(f"[INFO] YOLOv8n ONNX model verified & saved to {target_path} ({os.path.getsize(target_path):,} bytes, SHA-256 verified)")
     return target_path
 
 
@@ -140,22 +170,28 @@ class YOLODetector:
         x_scale = orig_w / target_w
         y_scale = orig_h / target_h
 
-        # Extract candidates
-        for row in predictions:
-            scores = row[4:]
-            class_id = int(np.argmax(scores))
-            confidence = float(scores[class_id])
+        # Vectorized candidate extraction (Fix for Finding F-02: <1.5ms vs 35-50ms in Python loop)
+        scores = predictions[:, 4:]
+        max_cids = np.argmax(scores, axis=1)
+        max_confs = scores[np.arange(len(scores)), max_cids]
 
-            if confidence >= self.conf_threshold:
-                cx, cy, w, h = row[0], row[1], row[2], row[3]
-                x1 = int((cx - 0.5 * w) * x_scale)
-                y1 = int((cy - 0.5 * h) * y_scale)
-                width = int(w * x_scale)
-                height = int(h * y_scale)
+        mask = max_confs >= self.conf_threshold
+        if np.any(mask):
+            valid_preds = predictions[mask]
+            confidences = max_confs[mask].astype(float).tolist()
+            class_ids = max_cids[mask].astype(int).tolist()
 
-                boxes.append([x1, y1, width, height])
-                confidences.append(confidence)
-                class_ids.append(class_id)
+            cx = valid_preds[:, 0]
+            cy = valid_preds[:, 1]
+            w = valid_preds[:, 2]
+            h = valid_preds[:, 3]
+
+            x1 = np.maximum(0, ((cx - 0.5 * w) * x_scale)).astype(int)
+            y1 = np.maximum(0, ((cy - 0.5 * h) * y_scale)).astype(int)
+            bw = (w * x_scale).astype(int)
+            bh = (h * y_scale).astype(int)
+
+            boxes = np.column_stack([x1, y1, bw, bh]).tolist()
 
         # Apply Non-Maximum Suppression (NMS)
         indices = cv2.dnn.NMSBoxes(boxes, confidences, self.conf_threshold, self.nms_threshold)

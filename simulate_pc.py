@@ -65,20 +65,31 @@ class VoiceSynthesizer:
         threading.Thread(target=self._speak_worker, args=(text,), daemon=True).start()
 
     def _speak_worker(self, text):
-        with self.lock:
+        clean_text = text.replace('"', '').replace("'", "")
+        try:
+            print(f"[VOICE] SPEAKING: {text}")
+        except Exception:
+            pass
+
+        # Windows Native SAPI direct non-blocking speech with audio purge (Fix for Finding F-04)
+        if sys.platform == "win32":
             try:
-                print(f"[VOICE] SPEAKING: {text}")
+                import pythoncom
+                pythoncom.CoInitialize()
             except Exception:
                 pass
-            # Windows Native SAPI via SpFileStream + winsound
-            if sys.platform == "win32":
-                clean_text = text.replace('"', '').replace("'", "")
-                # Method 1: SAPI stream to temp wav + winsound
-                try:
-                    import pythoncom
-                    pythoncom.CoInitialize()
-                except Exception:
-                    pass
+
+            try:
+                import win32com.client
+                # SVSFlagsAsync (1) + SVSFPurgeBeforeSpeak (2): non-blocking & purges stale cues instantly
+                voice = win32com.client.Dispatch("SAPI.SpVoice")
+                voice.Speak(clean_text, 1 | 2)
+                return
+            except Exception:
+                pass
+
+            # Fallback using async winsound
+            with self.lock:
                 try:
                     import winsound
                     import win32com.client
@@ -86,14 +97,9 @@ class VoiceSynthesizer:
                     stream = win32com.client.Dispatch("SAPI.SpFileStream")
                     stream.Open(self.temp_wav, 3, False)
                     voice.AudioOutputStream = stream
-                    voice.Speak(clean_text)
+                    voice.Speak(clean_text, 0)
                     stream.Close()
-                    winsound.PlaySound(self.temp_wav, winsound.SND_FILENAME)
-                    try:
-                        if os.path.exists(self.temp_wav):
-                            os.remove(self.temp_wav)
-                    except Exception:
-                        pass
+                    winsound.PlaySound(self.temp_wav, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_PURGE)
                     return
                 except Exception:
                     pass
@@ -367,28 +373,29 @@ def main():
                 target_zone=target_sector
             )
 
-            # Speak automatically on obstacle detection, zone change, or manual trigger
-            if has_obstacle or manual_trigger:
-                time_since = current_time - last_scan_time
-                state_changed = (candidate_announcement != current_announcement)
-                should_alert = manual_trigger or (state_changed and time_since > 1.5) or (time_since > COOLDOWN)
+            # Speak automatically on obstacle detection, zone change, clear-path update, or manual trigger
+            time_since = current_time - last_scan_time
+            state_changed = (candidate_announcement != current_announcement)
+            should_alert = manual_trigger or (state_changed and time_since > 1.5) or (has_obstacle and time_since > COOLDOWN)
 
-                if should_alert:
-                    current_announcement = candidate_announcement
-                    if target_sector:
-                        trigger_reason = f"Query {target_sector.upper()} Sector"
-                    elif manual_trigger:
-                        trigger_reason = "Button Pressed (Manual Scan)"
-                    elif len(detections) > 0:
-                        obs_class = detections[0]['class']
-                        obs_zone = detections[0].get('zone', 'path')
-                        trigger_reason = f"Obstacle Alert: {obs_class} ({obs_zone.upper()})"
-                    else:
-                        trigger_reason = f"Proximity Alert ({distance_meters:.2f}m)"
+            if should_alert:
+                current_announcement = candidate_announcement
+                if target_sector:
+                    trigger_reason = f"Query {target_sector.upper()} Sector"
+                elif manual_trigger:
+                    trigger_reason = "Button Pressed (Manual Scan)"
+                elif len(detections) > 0:
+                    obs_class = detections[0]['class']
+                    obs_zone = detections[0].get('zone', 'path')
+                    trigger_reason = f"Obstacle Alert: {obs_class} ({obs_zone.upper()})"
+                elif distance_meters < 1.0:
+                    trigger_reason = f"Proximity Alert ({distance_meters:.2f}m)"
+                else:
+                    trigger_reason = "Clear Path Navigation Update"
 
-                    print(f"\n[TRIGGER] {trigger_reason} -> \"{current_announcement}\"")
-                    voice.speak(current_announcement)
-                    last_scan_time = current_time
+                print(f"\n[TRIGGER] {trigger_reason} -> \"{current_announcement}\"")
+                voice.speak(current_announcement)
+                last_scan_time = current_time
 
             # ---------------------------------------------
             # DRAW TELEMETRY & SPATIAL HUD OVERLAY

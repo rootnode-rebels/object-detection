@@ -101,20 +101,10 @@ def get_cpu_utilization():
 # 2. TEXT-TO-SPEECH (NON-BLOCKING)
 # ==========================================
 tts_process = None
-_sapi_voice = None
-_sapi_stream = None
-
-if sys.platform == "win32":
-    try:
-        import win32com.client
-        _sapi_voice = win32com.client.Dispatch("SAPI.SpVoice")
-        _sapi_stream = win32com.client.Dispatch("SAPI.SpFileStream")
-    except Exception:
-        pass
 
 def speak(text):
     """Speaks text asynchronously using espeak (Linux/Pi) or native OS speech without blocking."""
-    global tts_process, _sapi_voice, _sapi_stream
+    global tts_process
     try:
         print(f"[VOICE] SPEAKING: {text}")
     except Exception:
@@ -123,24 +113,40 @@ def speak(text):
     if sys.platform == "win32":
         def _win_speak():
             clean_text = text.replace('"', '').replace("'", "")
-            temp_wav = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_temp_assistant_tts.wav")
+            # Thread-safe Windows SAPI direct speech (Fix for Finding F-03)
             try:
-                import winsound
-                if _sapi_voice and _sapi_stream:
-                    _sapi_stream.Open(temp_wav, 3, False)
-                    _sapi_voice.AudioOutputStream = _sapi_stream
-                    _sapi_voice.Speak(clean_text)
-                    _sapi_stream.Close()
-                    winsound.PlaySound(temp_wav, winsound.SND_FILENAME)
-                    try:
-                        if os.path.exists(temp_wav):
-                            os.remove(temp_wav)
-                    except Exception:
-                        pass
-                    return
+                import pythoncom
+                pythoncom.CoInitialize()
             except Exception:
                 pass
 
+            try:
+                import win32com.client
+                # SVSFlagsAsync (1) + SVSFPurgeBeforeSpeak (2): non-blocking & purges stale alerts
+                voice = win32com.client.Dispatch("SAPI.SpVoice")
+                voice.Speak(clean_text, 1 | 2)
+                return
+            except Exception:
+                pass
+
+            # Fallback: File stream with asynchronous winsound
+            try:
+                import winsound
+                import win32com.client
+                import tempfile
+                temp_wav = os.path.join(tempfile.gettempdir(), "_temp_assistant_tts.wav")
+                voice = win32com.client.Dispatch("SAPI.SpVoice")
+                stream = win32com.client.Dispatch("SAPI.SpFileStream")
+                stream.Open(temp_wav, 3, False)
+                voice.AudioOutputStream = stream
+                voice.Speak(clean_text, 0)
+                stream.Close()
+                winsound.PlaySound(temp_wav, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_PURGE)
+                return
+            except Exception:
+                pass
+
+            # Ultimate fallback: PowerShell
             try:
                 ps_cmd = f"Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; $s.Speak('{clean_text}')"
                 subprocess.run(["powershell", "-NoProfile", "-Command", ps_cmd], capture_output=True, timeout=5)
@@ -324,7 +330,11 @@ def main():
             candidate_announcement = format_spatial_announcement(detections, distance_meters=distance_meters)
             state_changed = (candidate_announcement != current_announcement) if 'current_announcement' in locals() else True
 
-            should_alert = button_pressed or (has_obstacle and (state_changed and time_since_last_alert > 1.5 or time_since_last_alert > COOLDOWN))
+            # Fix for Finding F-01 (Silent Recovery Bug):
+            # Alert immediately if button pressed, or when navigation state changes
+            # (e.g., path clears or new obstacle appears) with 1.5s debouncing,
+            # or if an obstacle persists and the periodic reminder cooldown expires.
+            should_alert = button_pressed or (state_changed and time_since_last_alert > 1.5) or (has_obstacle and time_since_last_alert > COOLDOWN)
 
             if should_alert:
                 current_announcement = candidate_announcement
