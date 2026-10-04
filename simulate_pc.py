@@ -113,21 +113,21 @@ class VoiceSynthesizer:
                 except Exception:
                     pass
 
-            # macOS native say command
-            elif sys.platform == "darwin":
-                try:
-                    subprocess.run(["say", text], capture_output=True, timeout=5)
-                    return
-                except Exception:
-                    pass
+        # macOS native say command
+        elif sys.platform == "darwin":
+            try:
+                subprocess.run(["say", text], capture_output=True, timeout=5)
+                return
+            except Exception:
+                pass
 
-            # Linux espeak command
-            else:
-                try:
-                    subprocess.run(["espeak", "-ven+f3", "-s155", text], capture_output=True, timeout=5)
-                    return
-                except Exception:
-                    pass
+        # Linux espeak command
+        else:
+            try:
+                subprocess.run(["espeak", "-ven+f3", "-s155", text], capture_output=True, timeout=5)
+                return
+            except Exception:
+                pass
 
 
 def get_resource_path(relative_path):

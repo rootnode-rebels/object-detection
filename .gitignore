@@ -60,5 +60,11 @@ CHAT_ARCHIVE.md
 chat_history.md
 CHAT_SAVE.md
 
+# Audit Reports & Generation Scripts (Private to local workspace)
+generate_audit_reports.py
+*Audit_Report*
+*.docx
+
+
 
 
