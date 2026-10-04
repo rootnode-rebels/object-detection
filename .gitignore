@@ -54,4 +54,11 @@ generate_*_pdf.py
 *.zip
 *.exe
 
+# Local AI Memory & Chat History (Private to local workspace)
+brain.md
+CHAT_ARCHIVE.md
+chat_history.md
+CHAT_SAVE.md
+
+
 
