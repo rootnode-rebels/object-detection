@@ -16,10 +16,11 @@ import threading
 import argparse
 
 # Ensure current directory is in sys.path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, BASE_DIR)
 
-# CPU-Optimized YOLOv8 Detector
-from yolo_detector import YOLODetector, YOLO_ONNX_PATH
+# CPU-Optimized YOLOv8 Detector & Spatial Formatter
+from yolo_detector import YOLODetector, format_spatial_announcement
 
 # Safe GPIO import for Raspberry Pi
 try:
@@ -160,6 +161,10 @@ def speak(text):
         try:
             if tts_process.poll() is None:
                 tts_process.terminate()
+                try:
+                    tts_process.wait(timeout=0.2)
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -247,20 +252,23 @@ def main():
     parser.add_argument("--resolution", type=int, default=320, choices=[320, 640],
                         help="YOLO input resolution: 320 for high FPS (~15-20 FPS on Pi 5), 640 for max accuracy")
     parser.add_argument("--conf", type=float, default=0.45, help="Confidence threshold (default: 0.45)")
+    parser.add_argument("--camera", type=int, default=0, help="Camera device index (default: 0)")
     parser.add_argument("--headless", action="store_true", help="Run without graphical display window")
     parser.add_argument("--classes", type=str, default=None,
                         help="Custom classes: comma-separated list or path to a text file containing class names")
     args = parser.parse_args()
 
-    # Auto-detect assistive 92 model if not specified
+    # Auto-detect assistive 92 model if not specified (script-relative path)
+    default_model_path = os.path.join(BASE_DIR, "model_files", "yolov8_assistive_92.onnx")
     model_to_use = args.model
-    if model_to_use is None and os.path.exists("model_files/yolov8_assistive_92.onnx"):
-        model_to_use = "model_files/yolov8_assistive_92.onnx"
+    if model_to_use is None and os.path.exists(default_model_path):
+        model_to_use = default_model_path
 
     # Parse custom classes if provided, or auto-load classes.txt for assistive model
+    default_classes_path = os.path.join(BASE_DIR, "classes.txt")
     classes_file = args.classes
-    if classes_file is None and model_to_use == "model_files/yolov8_assistive_92.onnx" and os.path.exists("classes.txt"):
-        classes_file = "classes.txt"
+    if classes_file is None and model_to_use == default_model_path and os.path.exists(default_classes_path):
+        classes_file = default_classes_path
 
     custom_classes = None
     if classes_file:
@@ -286,7 +294,7 @@ def main():
 
     # Initialize Camera
     print("[INFO] Starting Threaded Camera Stream...")
-    cam = ThreadedCameraStream(src=0, width=640, height=480)
+    cam = ThreadedCameraStream(src=args.camera, width=640, height=480)
     time.sleep(1.5)  # Warmup
 
     if not cam.is_opened():
@@ -295,7 +303,8 @@ def main():
 
     speak("AI vision system ready.")
 
-    last_scan_time = 0.0
+    last_scan_time = time.time()
+    current_announcement = "AI vision system ready."
     COOLDOWN = 3.0  # Cooldown between voice alerts
     frame_count = 0
     fps_start_time = time.time()
@@ -326,9 +335,8 @@ def main():
             has_obstacle = (len(detections) > 0) or (distance_meters < 1.0)
             time_since_last_alert = time.time() - last_scan_time
 
-            from yolo_detector import format_spatial_announcement
             candidate_announcement = format_spatial_announcement(detections, distance_meters=distance_meters)
-            state_changed = (candidate_announcement != current_announcement) if 'current_announcement' in locals() else True
+            state_changed = (candidate_announcement != current_announcement)
 
             # Fix for Finding F-01 (Silent Recovery Bug):
             # Alert immediately if button pressed, or when navigation state changes
@@ -338,7 +346,15 @@ def main():
 
             if should_alert:
                 current_announcement = candidate_announcement
-                trigger_reason = "Button Pressed (Tactile Scan)" if button_pressed else f"Obstacle Alert ({len(detections)} detected)"
+                if button_pressed:
+                    trigger_reason = "Button Pressed (Tactile Scan)"
+                elif len(detections) > 0:
+                    trigger_reason = f"Obstacle Alert ({len(detections)} detected)"
+                elif distance_meters < 1.0:
+                    trigger_reason = f"Proximity Alert ({distance_meters:.2f}m)"
+                else:
+                    trigger_reason = "Clear Path Navigation Update"
+
                 print(f"\n[TRIGGER] {trigger_reason} -> \"{current_announcement}\"")
                 speak(current_announcement)
                 last_scan_time = time.time()

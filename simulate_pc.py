@@ -35,9 +35,9 @@ try:
 except Exception:
     pass
 
-# Import YOLO detector
+# Import YOLO detector & Spatial Formatter
 try:
-    from yolo_detector import YOLODetector, YOLO_ONNX_PATH, COCO_CLASSES
+    from yolo_detector import YOLODetector, YOLO_ONNX_PATH, COCO_CLASSES, format_spatial_announcement
     YOLO_AVAILABLE = True
 except ImportError:
     YOLO_AVAILABLE = False
@@ -51,15 +51,6 @@ class VoiceSynthesizer:
     def __init__(self):
         self.lock = threading.Lock()
         self.temp_wav = os.path.join(tempfile.gettempdir(), "_smart_assistant_tts.wav")
-        self._sapi_voice = None
-        self._sapi_stream = None
-        if sys.platform == "win32":
-            try:
-                import win32com.client
-                self._sapi_voice = win32com.client.Dispatch("SAPI.SpVoice")
-                self._sapi_stream = win32com.client.Dispatch("SAPI.SpFileStream")
-            except Exception:
-                pass
 
     def speak(self, text):
         threading.Thread(target=self._speak_worker, args=(text,), daemon=True).start()
@@ -238,7 +229,7 @@ def main():
     virtual_offset_x = 0  # Horizontal shift for simulated obstacle (-180 to +180)
     auto_walk = False
     walk_direction = -1  # moving closer
-    last_scan_time = 0.0
+    last_scan_time = time.time()
     COOLDOWN = 3.0
     current_announcement = "Simulation Ready. Automatic obstacle detection active."
 
@@ -366,7 +357,6 @@ def main():
             has_obstacle = (len(detections) > 0) or (distance_meters < 1.0)
             current_time = time.time()
 
-            from yolo_detector import format_spatial_announcement
             candidate_announcement = format_spatial_announcement(
                 detections,
                 distance_meters=distance_meters,

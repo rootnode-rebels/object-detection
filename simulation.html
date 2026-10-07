@@ -486,10 +486,10 @@
         <span>Or switch to live laptop webcam</span>
       </div>
       <div class="scene-selector">
-        <button class="scene-btn active" onclick="switchScene('hallway')">🏢 Hallway / Door</button>
-        <button class="scene-btn" onclick="switchScene('stairs')">🪜 Staircase / Rail</button>
-        <button class="scene-btn" onclick="switchScene('street')">🚗 Street / Rickshaw</button>
-        <button class="scene-btn" onclick="toggleWebcam()">📹 Use Live Webcam</button>
+        <button class="scene-btn active" onclick="switchScene('hallway', this)">🏢 Hallway / Door</button>
+        <button class="scene-btn" onclick="switchScene('stairs', this)">🪜 Staircase / Rail</button>
+        <button class="scene-btn" onclick="switchScene('street', this)">🚗 Street / Rickshaw</button>
+        <button class="scene-btn" onclick="toggleWebcam(this)">📹 Use Live Webcam</button>
       </div>
 
       <!-- Telemetry Stats -->
@@ -850,28 +850,33 @@
     }
 
     // Scene Switcher
-    function switchScene(sceneKey) {
+    function switchScene(sceneKey, btnElement) {
       if (isWebcam && webcamStream) {
         webcamStream.getTracks().forEach(t => t.stop());
+        webcamStream = null;
         isWebcam = false;
       }
       currentScene = sceneKey;
 
       document.querySelectorAll('.scene-btn').forEach(b => b.classList.remove('active'));
-      event.target.classList.add('active');
+      if (btnElement) {
+        btnElement.classList.add('active');
+      }
 
       logMessage('INFO', `Switched environment to: ${sceneKey.toUpperCase()}`);
     }
 
     // Live Webcam
-    async function toggleWebcam() {
+    async function toggleWebcam(btnElement) {
       try {
         if (!isWebcam) {
           webcamStream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 420 } });
           video.srcObject = webcamStream;
           isWebcam = true;
           document.querySelectorAll('.scene-btn').forEach(b => b.classList.remove('active'));
-          event.target.classList.add('active');
+          if (btnElement) {
+            btnElement.classList.add('active');
+          }
           logMessage('INFO', 'Switched to Live Webcam stream.');
         }
       } catch (err) {

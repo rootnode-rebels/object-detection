@@ -8,7 +8,7 @@ echo.
 
 set PYTHON_BIN=portable_python\python.exe
 
-if not exist %PYTHON_BIN% (
+if not exist "%PYTHON_BIN%" (
     set PYTHON_BIN=python
 )
 

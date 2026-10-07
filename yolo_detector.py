@@ -26,10 +26,11 @@ COCO_CLASSES = [
     "book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush"
 ]
 
-MODEL_DIR = "model_files"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_DIR = os.path.join(BASE_DIR, "model_files")
 YOLO_ONNX_PATH = os.path.join(MODEL_DIR, "yolov8n.onnx")
 ASSISTIVE_ONNX_PATH = os.path.join(MODEL_DIR, "yolov8_assistive_92.onnx")
-CLASSES_TXT_PATH = "classes.txt"
+CLASSES_TXT_PATH = os.path.join(BASE_DIR, "classes.txt")
 YOLO_ONNX_URL = "https://github.com/ultralytics/assets/releases/download/v8.2.0/yolov8n.onnx"
 
 
@@ -193,12 +194,16 @@ class YOLODetector:
 
             boxes = np.column_stack([x1, y1, bw, bh]).tolist()
 
+        if len(boxes) == 0:
+            return []
+
         # Apply Non-Maximum Suppression (NMS)
         indices = cv2.dnn.NMSBoxes(boxes, confidences, self.conf_threshold, self.nms_threshold)
 
         detections = []
         if len(indices) > 0:
-            for idx in indices.flatten():
+            flat_indices = indices.flatten() if hasattr(indices, 'flatten') else list(indices)
+            for idx in flat_indices:
                 box = boxes[idx]
                 x1 = max(0, box[0])
                 y1 = max(0, box[1])
@@ -260,7 +265,9 @@ def format_spatial_announcement(detections, distance_meters=None, target_zone=No
     has_left = bool(zones["left"])
     has_right = bool(zones["right"])
 
-    dist_str = f" at {distance_meters:.1f} meters" if (distance_meters is not None and distance_meters <= 3.0) else ""
+    # Only announce distance if an actual obstacle is within proximity (< 3.0m)
+    # Default 3.0m indicates no echo / clear path and should not be verbalized as a detected distance
+    dist_str = f" at {distance_meters:.1f} meters" if (distance_meters is not None and distance_meters < 3.0) else ""
 
     # 1. Single-sector targeted query ([L], [M], [R])
     if target_zone:

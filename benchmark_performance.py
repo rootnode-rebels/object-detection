@@ -42,12 +42,16 @@ def get_soc_temperature():
 
 
 def run_benchmark(model_path=None, classes_path=None, num_frames=100, resolution=320):
-    # Auto-detect 92-class assistive model if present
-    if model_path is None and os.path.exists("model_files/yolov8_assistive_92.onnx"):
-        model_path = "model_files/yolov8_assistive_92.onnx"
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    default_model = os.path.join(BASE_DIR, "model_files", "yolov8_assistive_92.onnx")
+    default_classes = os.path.join(BASE_DIR, "classes.txt")
 
-    if classes_path is None and model_path == "model_files/yolov8_assistive_92.onnx" and os.path.exists("classes.txt"):
-        classes_path = "classes.txt"
+    # Auto-detect 92-class assistive model if present
+    if model_path is None and os.path.exists(default_model):
+        model_path = default_model
+
+    if classes_path is None and model_path == default_model and os.path.exists(default_classes):
+        classes_path = default_classes
 
     custom_classes = None
     if classes_path and os.path.exists(classes_path):
