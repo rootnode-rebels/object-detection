@@ -166,7 +166,7 @@ def camera_yolo_loop():
                 state.walk_dir = -1
 
         # Run Real YOLOv8 Inference on the Frame
-        detections = detector.detect(frame)
+        detections = detector.detect(frame, distance_meters=state.distance)
 
         if state.virtual_cam and len(detections) == 0:
             cx = ox + ow // 2
@@ -174,7 +174,7 @@ def camera_yolo_loop():
             col = "left" if cx < 640 / 3.0 else ("right" if cx > 1280 / 3.0 else "middle")
             row = "top" if cy < 480 / 3.0 else ("bottom" if cy > 960 / 3.0 else "middle")
             z = "middle-center" if (row == "middle" and col == "middle") else f"{row}-{col}"
-            detections = [{
+            sim_det = [{
                 "class": "person",
                 "confidence": 0.93,
                 "box": [ox, oy, ox + ow, oy + oh],
@@ -184,18 +184,21 @@ def camera_yolo_loop():
                 "center_x": cx,
                 "center_y": cy
             }]
+            detections = detector.tracker.update(sim_det, distance_meters=state.distance)
 
         with state.lock:
             state.current_detections = detections
 
-        # Autonomous proximity trigger (< 1.0m) or new obstacle
+        # Autonomous proximity trigger (< 1.0m) or new obstacle or approaching hazard
         now = time.time()
+        has_approaching = any(d.get("is_approaching", False) for d in detections)
         ann = format_spatial_announcement(detections, distance_meters=state.distance)
         with state.lock:
             state.current_announcement = ann
 
-        # Speak when state changes or on distance alert with cooldown
-        if (ann != state.last_spoken_announcement and now - state.last_scan_time > 2.0) or \
+        # Speak when state changes or on distance alert / approaching hazard
+        is_emergency = has_approaching or (state.distance < 1.0)
+        if (ann != state.last_spoken_announcement and (is_emergency or now - state.last_scan_time > 1.2)) or \
            (state.distance < 1.0 and now - state.last_scan_time > state.cooldown):
             state.last_spoken_announcement = ann
             state.last_scan_time = now
@@ -235,17 +238,25 @@ def camera_yolo_loop():
         for det in detections:
             box = det["box"]
             z = det.get("zone", "middle-center")
-            if "middle" in z or "center" in z:
+            is_app = det.get("is_approaching", False)
+            app_spd = det.get("approach_speed")
+
+            if is_app:
+                color = (0, 0, 255) if app_spd == "fast" else (0, 140, 255)
+                label = f"[APPROACHING] {det['class'].upper()} ({app_spd or 'steady'})"
+            elif "middle" in z or "center" in z:
                 color = (0, 80, 255)
+                label = f"{det['class'].upper()} ({int(det['confidence']*100)}%) [{z.upper()}]"
             elif "left" in z:
                 color = (255, 180, 0)
+                label = f"{det['class'].upper()} ({int(det['confidence']*100)}%) [{z.upper()}]"
             else:
                 color = (0, 220, 100)
+                label = f"{det['class'].upper()} ({int(det['confidence']*100)}%) [{z.upper()}]"
 
-            label = f"{det['class'].upper()} ({int(det['confidence']*100)}%) [{z.upper()}]"
             cv2.rectangle(frame, (int(box[0]), int(box[1])), (int(box[2]), int(box[3])), color, 2)
             cv2.putText(frame, label, (int(box[0]), max(20, int(box[1]) - 8)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 2)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
 
         # Calculate FPS
         frame_count += 1

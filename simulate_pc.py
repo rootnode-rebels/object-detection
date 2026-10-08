@@ -350,7 +350,7 @@ def main():
             # Run detection on current frame
             detections = []
             if detector is not None:
-                detections = detector.detect(frame)
+                detections = detector.detect(frame, distance_meters=distance_meters)
             if virtual_cam and len(detections) == 0:
                 sim_center_x = ox + ow // 2
                 sim_center_y = oy + oh // 2
@@ -360,19 +360,27 @@ def main():
                 row = "top" if sim_center_y < 160 else ("bottom" if sim_center_y > 320 else "middle")
                 sim_zone = f"{row}-{col}" if (row != "middle" or col != "middle") else "middle-center"
 
-                detections = [{
+                sim_det = [{
                     "class": "person",
                     "confidence": 0.92,
                     "box": [ox, oy, ox + ow, oy + oh],
                     "zone": sim_zone,
-                    "center": (sim_center_x, sim_center_y)
+                    "center": (sim_center_x, sim_center_y),
+                    "center_x": sim_center_x,
+                    "center_y": sim_center_y
                 }]
+                if detector is not None:
+                    detections = detector.tracker.update(sim_det, distance_meters=distance_meters)
+                else:
+                    detections = sim_det
 
             # ---------------------------------------------
             # AUTOMATIC REAL-TIME OBSTACLE VOICE GUIDANCE
             # ---------------------------------------------
             # Automatically speaks navigation commands whenever an obstacle is detected!
             has_obstacle = (len(detections) > 0) or (distance_meters < 1.0)
+            has_approaching = any(d.get("is_approaching", False) for d in detections)
+            is_emergency = has_approaching or (distance_meters < 1.0)
             current_time = time.time()
 
             candidate_announcement = format_spatial_announcement(
@@ -384,7 +392,7 @@ def main():
             # Speak automatically on obstacle detection, zone change, clear-path update, or manual trigger
             time_since = current_time - last_scan_time
             state_changed = (candidate_announcement != current_announcement)
-            should_alert = manual_trigger or (state_changed and time_since > 1.5) or (has_obstacle and time_since > COOLDOWN)
+            should_alert = manual_trigger or (state_changed and (is_emergency or time_since > 1.2)) or (has_obstacle and time_since > COOLDOWN)
 
             if should_alert:
                 current_announcement = candidate_announcement
@@ -392,6 +400,9 @@ def main():
                     trigger_reason = f"Query {target_sector.upper()} Sector"
                 elif manual_trigger:
                     trigger_reason = "Button Pressed (Manual Scan)"
+                elif has_approaching:
+                    app_names = [d["class"] for d in detections if d.get("is_approaching")]
+                    trigger_reason = f"Approaching Hazard: {', '.join(app_names).upper()}"
                 elif len(detections) > 0:
                     obs_class = detections[0]['class']
                     obs_zone = detections[0].get('zone', 'path')
@@ -442,14 +453,22 @@ def main():
             for det in detections:
                 box = det["box"]
                 z = det.get("zone", "middle")
-                if z == "middle":
+                is_app = det.get("is_approaching", False)
+                app_spd = det.get("approach_speed")
+
+                if is_app:
+                    color = (0, 0, 255) if app_spd == "fast" else (0, 140, 255)
+                    label = f"[APPROACHING] {det['class']} ({app_spd or 'steady'})"
+                elif z == "middle" or "center" in z:
                     color = (0, 80, 255)  # Orange/Red for center obstacle
-                elif z == "left":
+                    label = f"{det['class']} ({z})"
+                elif "left" in z:
                     color = (255, 180, 0)  # Cyan/Blue
+                    label = f"{det['class']} ({z})"
                 else:
                     color = (0, 220, 100)  # Green
+                    label = f"{det['class']} ({z})"
 
-                label = f"{det['class']} ({z})"
                 cv2.rectangle(frame, (box[0], box[1]), (box[2], box[3]), color, 2)
                 cv2.putText(frame, label, (box[0], max(20, box[1] - 8)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
@@ -466,8 +485,10 @@ def main():
                         (15, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.58, dist_color, 2)
 
             walk_mode_str = "AUTO-WALK [ON]" if auto_walk else "MANUAL [W/S]"
-            cv2.putText(frame, f"FPS: {fps:.1f} | Mode: {walk_mode_str} | [SPACE]: Full Scan",
-                        (15, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
+            radar_status = "[APPROACHING HAZARD!]" if has_approaching else "[RADAR OK]"
+            radar_color = (0, 0, 255) if has_approaching else (0, 255, 180)
+            cv2.putText(frame, f"FPS: {fps:.1f} | Mode: {walk_mode_str} | RADAR: {radar_status}",
+                        (15, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.45, radar_color if has_approaching else (200, 200, 200), 1)
             cv2.putText(frame, "Hotkeys: [7,8,9] Top 3 | [4,5,6/L,M,R] Mid 3 | [1,2,3] Low 3 | [SPACE] Scan | [W/S] Dist",
                         (15, 68), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (160, 175, 190), 1)
 

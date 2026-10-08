@@ -91,15 +91,194 @@ def download_yolo_onnx(target_path=YOLO_ONNX_PATH, expected_hash=YOLO_ONNX_SHA25
     return target_path
 
 
+# Specific hazard category sets to empower natural phrasing for blind individuals
+GROUND_HAZARD_CLASSES = {
+    "staircase", "pothole", "speed breaker", "pedestrian crossing", "road barrier",
+    "road divider", "traffic cone", "stone", "rock", "brick", "cement bag",
+    "wooden plank", "manhole", "drain", "construction material"
+}
+
+OVERHEAD_HAZARD_CLASSES = {
+    "tree branch", "road sign", "light", "street light", "electric pole"
+}
+
+VEHICLE_APPROACH_CLASSES = {
+    "car", "bus", "truck", "auto-rickshaw", "motorcycle", "scooter", "bicycle"
+}
+
+
+class ApproachTracker:
+    """
+    Lightweight, multi-frame object tracker and approach motion detector.
+    Specifically designed for assistive devices for visually impaired users.
+    
+    Capabilities:
+    1. Tracks bounding boxes across consecutive video frames by centroid and IoU.
+    2. Measures bounding box expansion rate (growth in area ratio over time window).
+    3. Fuses ultrasonic proximity trend (decreasing distance over time).
+    4. Categorizes approach motion:
+       - 'fast' / 'rapid' (fast vehicle, running person/animal, or steep distance drop)
+       - 'steady' (steady approach towards user or user closing in)
+       - None (static or receding)
+    """
+    def __init__(self, max_missed_frames=8, min_growth_thresh=0.14, rapid_growth_thresh=0.35):
+        self.next_track_id = 1
+        self.tracks = {}  # track_id -> dict
+        self.max_missed_frames = max_missed_frames
+        self.min_growth_thresh = min_growth_thresh
+        self.rapid_growth_thresh = rapid_growth_thresh
+        self.prev_distance = None
+        self.prev_distance_time = 0.0
+
+    def update(self, detections, distance_meters=None):
+        now = time.time()
+
+        # Check ultrasonic distance delta if provided
+        distance_dropping = False
+        distance_rapid_drop = False
+        if distance_meters is not None and 0.0 < distance_meters < 3.0:
+            if self.prev_distance is not None:
+                dt = max(0.01, now - self.prev_distance_time)
+                dist_vel = (distance_meters - self.prev_distance) / dt  # m/s
+                if dist_vel < -0.15:  # Closing distance faster than 0.15 m/s
+                    distance_dropping = True
+                if dist_vel < -0.50 or (self.prev_distance - distance_meters >= 0.20):
+                    distance_rapid_drop = True
+            self.prev_distance = distance_meters
+            self.prev_distance_time = now
+
+        matched_track_ids = set()
+        for det in detections:
+            box = det["box"]
+            cls_name = det["class"]
+            center = (det["center_x"], det["center_y"])
+            area = max(1.0, float((box[2] - box[0]) * (box[3] - box[1])))
+
+            best_tid = None
+            best_score = -1.0
+
+            for tid, trk in self.tracks.items():
+                if tid in matched_track_ids:
+                    continue
+                if trk["class"] != cls_name:
+                    continue
+
+                # Compute IoU
+                tb = trk["box"]
+                ix1 = max(box[0], tb[0])
+                iy1 = max(box[1], tb[1])
+                ix2 = min(box[2], tb[2])
+                iy2 = min(box[3], tb[3])
+                iw = max(0, ix2 - ix1)
+                ih = max(0, iy2 - iy1)
+                inter_area = iw * ih
+                union_area = area + trk["area"] - inter_area
+                iou = inter_area / max(1.0, union_area)
+
+                # Center distance
+                tc = trk["center"]
+                dist = np.hypot(center[0] - tc[0], center[1] - tc[1])
+
+                if iou > 0.20 or (dist < 130 and iou > 0.05) or dist < 65:
+                    score = iou * 2.0 + (1.0 / (1.0 + dist * 0.02))
+                    if score > best_score:
+                        best_score = score
+                        best_tid = tid
+
+            if best_tid is not None:
+                matched_track_ids.add(best_tid)
+                trk = self.tracks[best_tid]
+                trk["missed"] = 0
+                trk["box"] = box
+                trk["center"] = center
+                trk["area"] = area
+                trk["zone"] = det.get("zone", "middle-center")
+                trk["history"].append((now, area, center, box))
+                if len(trk["history"]) > 25:
+                    trk["history"].pop(0)
+
+                # Evaluate growth over time window (0.2s - 1.2s ago)
+                is_approaching = False
+                approach_speed = None
+                growth_rate = 0.0
+
+                if len(trk["history"]) >= 2:
+                    baseline_entry = None
+                    for hist_entry in trk["history"]:
+                        age = now - hist_entry[0]
+                        if 0.10 <= age <= 1.2:
+                            baseline_entry = hist_entry
+                            break
+                    if baseline_entry is None:
+                        baseline_entry = trk["history"][0]
+
+                    baseline_area = baseline_entry[1]
+                    growth_rate = (area - baseline_area) / max(1.0, baseline_area)
+
+                    is_vehicle = cls_name in VEHICLE_APPROACH_CLASSES
+                    is_center = ("middle" in det.get("zone", "") or "center" in det.get("zone", ""))
+
+                    # Approaching condition: area expansion or distance dropping towards center object
+                    if (growth_rate >= self.min_growth_thresh and area > 1000) or (is_center and distance_dropping):
+                        is_approaching = True
+                        if growth_rate >= self.rapid_growth_thresh or distance_rapid_drop or (is_vehicle and growth_rate >= 0.18):
+                            approach_speed = "fast"
+                        else:
+                            approach_speed = "steady"
+
+                trk["is_approaching"] = is_approaching
+                trk["approach_speed"] = approach_speed
+                trk["growth_rate"] = growth_rate
+
+                det["track_id"] = best_tid
+                det["is_approaching"] = is_approaching
+                det["approach_speed"] = approach_speed
+                det["growth_rate"] = growth_rate
+            else:
+                tid = self.next_track_id
+                self.next_track_id += 1
+                matched_track_ids.add(tid)
+                self.tracks[tid] = {
+                    "id": tid,
+                    "class": cls_name,
+                    "box": box,
+                    "center": center,
+                    "area": area,
+                    "zone": det.get("zone", "middle-center"),
+                    "missed": 0,
+                    "is_approaching": False,
+                    "approach_speed": None,
+                    "growth_rate": 0.0,
+                    "history": [(now, area, center, box)]
+                }
+                det["track_id"] = tid
+                det["is_approaching"] = False
+                det["approach_speed"] = None
+                det["growth_rate"] = 0.0
+
+        stale_tids = []
+        for tid, trk in self.tracks.items():
+            if tid not in matched_track_ids:
+                trk["missed"] += 1
+                if trk["missed"] > self.max_missed_frames:
+                    stale_tids.append(tid)
+
+        for tid in stale_tids:
+            del self.tracks[tid]
+
+        return detections
+
+
 class YOLODetector:
     """
-    Lightweight, CPU-optimized YOLOv8 Object Detector.
+    Lightweight, CPU-optimized YOLOv8 Object Detector with multi-frame approach tracking.
     Runs entirely on standard Raspberry Pi 5 CPU without requiring an NPU or AI HAT.
     """
     def __init__(self, model_path=None, classes=None, conf_threshold=0.5, nms_threshold=0.45, input_size=(320, 320)):
         self.conf_threshold = conf_threshold
         self.nms_threshold = nms_threshold
         self.input_size = input_size  # (320, 320) yields ~15-20 FPS on Pi 5 CPU; (640, 640) for max accuracy
+        self.tracker = ApproachTracker()
 
         # Smart Model Selection:
         # 1. User-supplied model_path (if exists)
@@ -123,30 +302,37 @@ class YOLODetector:
         # Smart Classes Selection:
         if classes is not None:
             self.classes = classes
-        elif chosen_model == ASSISTIVE_ONNX_PATH and os.path.exists(CLASSES_TXT_PATH):
+        elif chosen_model and (os.path.abspath(chosen_model) == os.path.abspath(ASSISTIVE_ONNX_PATH) or "assistive" in os.path.basename(chosen_model).lower()) and os.path.exists(CLASSES_TXT_PATH):
             with open(CLASSES_TXT_PATH, "r") as f:
                 self.classes = [line.strip() for line in f if line.strip()]
         else:
             self.classes = COCO_CLASSES
 
         print(f"[INFO] Loading YOLOv8 ONNX model on CPU: {chosen_model}...")
-        self.net = cv2.dnn.readNetFromONNX(chosen_model)
+        try:
+            self.net = cv2.dnn.readNetFromONNX(chosen_model)
+            # Optimize for CPU execution on Raspberry Pi (ARM NEON)
+            self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+            self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+            print(f"[INFO] YOLOv8 CPU detector ready with {len(self.classes)} classes. Input resolution: {self.input_size[0]}x{self.input_size[1]}")
+        except Exception as e:
+            print(f"[ERROR] Failed to load ONNX model {chosen_model}: {e}")
+            self.net = None
 
-        # Optimize for CPU execution on Raspberry Pi (ARM NEON)
-        self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
-        self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
-        print(f"[INFO] YOLOv8 CPU detector ready with {len(self.classes)} classes. Input resolution: {self.input_size[0]}x{self.input_size[1]}")
-
-    def detect(self, frame):
+    def detect(self, frame, distance_meters=None):
         """
-        Runs object detection on the input frame.
+        Runs object detection on the input frame and tracks approaching objects.
         Returns:
         [
             {
                 "class": str,
                 "confidence": float,
                 "box": [x1, y1, x2, y2],
-                "direction": "left" | "center" | "right"
+                "direction": "directly ahead" | "on your left" | "on your right" ...,
+                "zone": "middle-center" | "middle-left" | ...,
+                "is_approaching": bool,
+                "approach_speed": "fast" | "steady" | None,
+                "track_id": int
             }, ...
         ]
         """
@@ -161,7 +347,7 @@ class YOLODetector:
         self.net.setInput(blob)
         outputs = self.net.forward()
 
-        # Output shape is [1, 84, 8400] -> Transpose to [8400, 84]
+        # Output shape is [1, num_attrs, num_anchors] -> Transpose to [num_anchors, num_attrs]
         predictions = np.transpose(outputs[0], (1, 0))
 
         boxes = []
@@ -171,7 +357,7 @@ class YOLODetector:
         x_scale = orig_w / target_w
         y_scale = orig_h / target_h
 
-        # Vectorized candidate extraction (Fix for Finding F-02: <1.5ms vs 35-50ms in Python loop)
+        # Vectorized candidate extraction (<1.5ms vs 35-50ms in Python loop)
         scores = predictions[:, 4:]
         max_cids = np.argmax(scores, axis=1)
         max_confs = scores[np.arange(len(scores)), max_cids]
@@ -195,6 +381,8 @@ class YOLODetector:
             boxes = np.column_stack([x1, y1, bw, bh]).tolist()
 
         if len(boxes) == 0:
+            # Still update tracker to keep timestamps and prune stale tracks
+            self.tracker.update([], distance_meters=distance_meters)
             return []
 
         # Apply Non-Maximum Suppression (NMS)
@@ -265,6 +453,9 @@ class YOLODetector:
                 })
 
         detections.sort(key=lambda d: d["confidence"], reverse=True)
+
+        # Multi-frame tracking to detect approaching objects and speeds
+        detections = self.tracker.update(detections, distance_meters=distance_meters)
         return detections
 
     def close(self):
@@ -272,28 +463,28 @@ class YOLODetector:
         self.net = None
 
 
-def format_spatial_announcement(detections, distance_meters=None, target_zone=None):
+def format_spatial_announcement(detections, distance_meters=None, target_zone=None, is_full_scan=False):
     """
-    Constructs actionable spatial navigation voice guidance across the 9-part grid:
-    Top Row:    top-left    | top-middle (overhead)     | top-right
-    Middle Row: middle-left | middle-center (ahead)    | middle-right
-    Bottom Row: bottom-left | bottom-middle (ground)    | bottom-right
+    Constructs actionable, life-critical spatial voice guidance specifically for blind individuals.
     
-    :param detections: List of detection dictionaries from YOLODetector.detect()
-    :param distance_meters: Optional ultrasonic distance reading in meters
-    :param target_zone: Optional filter (e.g. 'top-left', 'middle-center', 'bottom-middle', or 'left'/'middle'/'right')
+    Priority Hierarchy:
+    1. Approaching Hazards (names specific object approaching towards the user, e.g. car, person, dog, bicycle).
+    2. Ground Hazards (tripping/falling risks directly ahead: staircase, pothole, curb, drain, rocks).
+    3. Overhead Hazards (head collision risks directly ahead: tree branch, low signs).
+    4. Immediate Proximity Obstacles (< 1.0m ahead: "Stop! {object} directly in front of you at X meters").
+    5. Path Navigation Obstacles (what is ahead, left, and right with clear evasion directions).
+    6. All Clear ("Path clear ahead. Continue straight.").
     """
-    # 9 spatial zones dictionary
     zones = {
         "top-left": [], "top-middle": [], "top-right": [],
         "middle-left": [], "middle-center": [], "middle-right": [],
         "bottom-left": [], "bottom-middle": [], "bottom-right": []
     }
-    
-    # Map detections into 9 zones
+
+    approaching_objects = []
+
     for d in (detections or []):
         z = d.get("zone", "middle-center")
-        # Backwards compatible mapping if old 3-zone names appear
         if z == "middle": z = "middle-center"
         elif z == "left": z = "middle-left"
         elif z == "right": z = "middle-right"
@@ -301,91 +492,209 @@ def format_spatial_announcement(detections, distance_meters=None, target_zone=No
         if z in zones and d["class"] not in [item["class"] for item in zones[z]]:
             zones[z].append(d)
 
-    # Consider middle blocked if ultrasonic distance is under 1.0m
-    middle_proximity = (distance_meters is not None and distance_meters < 1.0)
+        if d.get("is_approaching", False):
+            approaching_objects.append(d)
+
+    middle_proximity = (distance_meters is not None and 0.0 < distance_meters < 1.0)
     has_mid = bool(zones["middle-center"]) or middle_proximity
     has_low_ahead = bool(zones["bottom-middle"])
     has_overhead = bool(zones["top-middle"])
 
-    dist_str = f" at {distance_meters:.1f} meters" if (distance_meters is not None and distance_meters < 3.0) else ""
+    dist_str = f" at {distance_meters:.1f} meters" if (distance_meters is not None and 0.0 < distance_meters < 3.0) else ""
 
-    # 1. Single Targeted Query for any of the 9 zones
+    # =========================================================
+    # 0. On-Demand Tactile Button Full Surroundings Scan
+    # =========================================================
+    if is_full_scan:
+        scan_parts = []
+        if approaching_objects:
+            app_n = approaching_objects[0]["class"]
+            scan_parts.append(f"Caution, {app_n} is approaching towards you")
+        if zones["middle-center"]:
+            mc_names = " and ".join([it["class"] for it in zones["middle-center"][:2]])
+            scan_parts.append(f"{mc_names} directly in front of you{dist_str}")
+        elif middle_proximity:
+            scan_parts.append(f"obstacle directly in front of you{dist_str}")
+
+        if zones["middle-left"]:
+            ml_names = " and ".join([it["class"] for it in zones["middle-left"][:2]])
+            scan_parts.append(f"{ml_names} on your left")
+        if zones["middle-right"]:
+            mr_names = " and ".join([it["class"] for it in zones["middle-right"][:2]])
+            scan_parts.append(f"{mr_names} on your right")
+
+        if zones["bottom-middle"]:
+            bm_names = " and ".join([it["class"] for it in zones["bottom-middle"][:2]])
+            scan_parts.append(f"low {bm_names} on the ground ahead")
+        if zones["top-middle"]:
+            tm_names = " and ".join([it["class"] for it in zones["top-middle"][:2]])
+            scan_parts.append(f"overhead {tm_names} ahead")
+
+        if scan_parts:
+            # Action suggestion
+            if not zones["middle-right"]:
+                action = "Path is clear on the right."
+            elif not zones["middle-left"]:
+                action = "Path is clear on the left."
+            elif not zones["middle-center"] and not middle_proximity:
+                action = "Center path is clear to walk."
+            else:
+                action = "Path blocked, please step aside."
+            return f"Surroundings scan: {', '.join(scan_parts)}. {action}"
+        else:
+            return "Surroundings scan: Path is completely clear ahead. Safe to walk straight."
+
+    # =========================================================
+    # 1. Targeted Directional Query (Manual button query by blind user)
+    # =========================================================
     if target_zone:
-        # Alias normalization
         tz = target_zone.lower()
-        if tz in ["middle", "ahead", "center"]: tz = "middle-center"
-        elif tz == "left": tz = "middle-left"
-        elif tz == "right": tz = "middle-right"
+        if tz in ["middle", "ahead", "center", "infront"]: tz = "middle-center"
+        elif tz in ["left"]: tz = "middle-left"
+        elif tz in ["right"]: tz = "middle-right"
         elif tz in ["top", "overhead"]: tz = "top-middle"
         elif tz in ["bottom", "ground", "low"]: tz = "bottom-middle"
 
         items = zones.get(tz, [])
         names = " and ".join([it["class"] for it in items[:2]]) if items else None
 
-        zone_names = {
+        zone_labels = {
             "top-left": "Top-left overhead",
-            "top-middle": "Top-overhead ahead",
+            "top-middle": "Overhead directly ahead",
             "top-right": "Top-right overhead",
-            "middle-left": "Middle left",
-            "middle-center": "Directly ahead",
-            "middle-right": "Middle right",
-            "bottom-left": "Ground level on the left",
-            "bottom-middle": "Ground level directly ahead",
-            "bottom-right": "Ground level on the right"
+            "middle-left": "On your left",
+            "middle-center": "Directly in front of you",
+            "middle-right": "On your right",
+            "bottom-left": "On the ground to your left",
+            "bottom-middle": "On the ground directly ahead",
+            "bottom-right": "On the ground to your right"
         }
-        z_label = zone_names.get(tz, tz)
+        z_label = zone_labels.get(tz, tz)
 
         if not names:
             if tz == "middle-center" and middle_proximity:
-                return f"Obstacle directly ahead{dist_str}. Step aside to the left or right."
+                return f"Obstacle directly in front of you{dist_str}. Step aside to the left or right."
             return f"{z_label} is clear."
-        
+
+        # Check if item in target zone is approaching
+        target_approaching = any(it.get("is_approaching", False) for it in items)
+        if target_approaching:
+            if tz == "middle-center":
+                return f"Caution, {names} is approaching towards you directly ahead{dist_str}."
+            elif "left" in tz:
+                return f"Caution, {names} is approaching on your left."
+            elif "right" in tz:
+                return f"Caution, {names} is approaching on your right."
+
         if tz == "bottom-middle":
-            return f"Low obstacle directly ahead on the ground: {names}{dist_str}. Watch your step."
+            return f"Ground hazard directly ahead: {names}{dist_str}. Watch your step."
         elif tz == "top-middle":
             return f"Overhead obstacle directly ahead: {names}. Watch your head."
         elif tz == "middle-center":
-            return f"Obstacle directly ahead: {names}{dist_str}. Go right or go left."
+            return f"{names.capitalize()} directly in front of you{dist_str}. Step aside to the left or right."
         elif "left" in tz:
-            return f"Obstacle on the {tz.replace('-', ' ')}: {names}. Safe to go right."
+            return f"{names.capitalize()} on your left. Safe to go straight or right."
         else:
-            return f"Obstacle on the {tz.replace('-', ' ')}: {names}. Safe to go left."
+            return f"{names.capitalize()} on your right. Safe to go straight or left."
 
-    # 2. Priority Navigation Announcement (Overhead, Ground Hazards, Path Obstacles)
-    # Check Ground Trip Hazards
+    # =========================================================
+    # 2. PRIORITY 1: APPROACHING OBJECTS (Life-Critical for Blind Person)
+    # =========================================================
+    if approaching_objects:
+        # Sort approaching objects: center objects and vehicles first
+        def _approach_priority(d):
+            score = 0
+            if d["class"] in VEHICLE_APPROACH_CLASSES:
+                score += 50
+            if "middle" in d.get("zone", "") or "center" in d.get("zone", ""):
+                score += 40
+            if d.get("approach_speed") == "fast":
+                score += 30
+            return score
+
+        approaching_objects.sort(key=_approach_priority, reverse=True)
+        top_app = approaching_objects[0]
+        app_name = top_app["class"]
+        app_zone = top_app.get("zone", "middle-center")
+        is_fast = (top_app.get("approach_speed") == "fast") or (app_name in VEHICLE_APPROACH_CLASSES)
+
+        if "middle" in app_zone and "center" in app_zone:
+            if is_fast:
+                return f"Warning! {app_name.capitalize()} approaching fast directly ahead{dist_str}! Step aside immediately."
+            else:
+                return f"Caution, {app_name} is approaching towards you directly ahead{dist_str}."
+        elif "left" in app_zone:
+            return f"Caution, {app_name} approaching on your left."
+        elif "right" in app_zone:
+            return f"Caution, {app_name} approaching on your right."
+        elif "bottom" in app_zone:
+            return f"Warning, {app_name} approaching directly ahead on the ground. Watch your step."
+        elif "top" in app_zone:
+            return f"Warning, overhead {app_name} approaching directly ahead. Watch your head."
+
+    # =========================================================
+    # 3. PRIORITY 2: GROUND HAZARDS (Fall / Trip Risks: Stairs, Potholes, Manholes)
+    # =========================================================
     if has_low_ahead:
         low_names = " and ".join([it["class"] for it in zones["bottom-middle"][:2]])
-        return f"Warning, ground obstacle directly ahead: {low_names}{dist_str}. Watch your step."
+        return f"Warning, ground hazard in front of you: {low_names}{dist_str}. Watch your step."
 
-    # Check Overhead Hazard
+    # Also check if any center detection is explicitly a ground hazard class (e.g. staircase, pothole)
+    center_ground_hazards = [it["class"] for it in zones["middle-center"] if it["class"] in GROUND_HAZARD_CLASSES]
+    if center_ground_hazards:
+        gh_name = " and ".join(center_ground_hazards[:2])
+        return f"Warning, {gh_name} directly in front of you on the ground{dist_str}. Watch your step."
+
+    # =========================================================
+    # 4. PRIORITY 3: OVERHEAD HAZARDS (Head Bump Risks: Tree Branches, Signs)
+    # =========================================================
     if has_overhead:
         top_names = " and ".join([it["class"] for it in zones["top-middle"][:2]])
-        return f"Warning, overhead obstacle directly ahead: {top_names}. Duck or step aside."
+        return f"Warning, overhead obstacle directly ahead: {top_names}. Watch your head."
 
-    # Eye/Chest Level Obstacles
-    m_name = (" and ".join([it["class"] for it in zones["middle-center"][:2]])) if zones["middle-center"] else ("obstacle" if middle_proximity else None)
+    # =========================================================
+    # 5. PRIORITY 4: IMMEDIATE PROXIMITY HAZARD (< 1.0 Meter in Front)
+    # =========================================================
+    m_name = (" and ".join([it["class"] for it in zones["middle-center"][:2]])) if zones["middle-center"] else None
     l_name = (" and ".join([it["class"] for it in zones["middle-left"][:2]])) if zones["middle-left"] else None
     r_name = (" and ".join([it["class"] for it in zones["middle-right"][:2]])) if zones["middle-right"] else None
 
+    # Fallback to general obstacle if ultrasonic triggered without YOLO label
+    front_label = m_name if m_name else ("obstacle" if middle_proximity else None)
+
+    if middle_proximity and front_label:
+        if not l_name and r_name:
+            return f"Stop! {front_label.capitalize()} directly in front of you{dist_str}. Step aside to the left."
+        elif not r_name and l_name:
+            return f"Stop! {front_label.capitalize()} directly in front of you{dist_str}. Step aside to the right."
+        elif not l_name and not r_name:
+            return f"Stop! {front_label.capitalize()} directly in front of you{dist_str}. Step aside to the left or right."
+        else:
+            return f"Stop! {front_label.capitalize()} directly in front of you{dist_str}. Path blocked, please stop."
+
+    # =========================================================
+    # 6. PRIORITY 5: PATH NAVIGATION (Obstacles at Standard Distance)
+    # =========================================================
     has_left = bool(l_name)
     has_right = bool(r_name)
+    has_front = bool(front_label)
 
-    if not has_mid and not has_left and not has_right:
+    if not has_front and not has_left and not has_right:
         return "Path clear ahead. Continue straight."
-    elif has_left and not has_mid and not has_right:
-        return f"Obstacle on your left: {l_name}. Path ahead is clear, go straight."
-    elif has_right and not has_mid and not has_left:
-        return f"Obstacle on your right: {r_name}. Path ahead is clear, go straight."
-    elif has_mid and not has_left and not has_right:
-        return f"Obstacle directly ahead: {m_name}{dist_str}. Go right or go left."
-    elif has_mid and has_left and not has_right:
-        return f"Obstacle ahead and on the left: {m_name}{dist_str}. Go right, path is clear on the right."
-    elif has_mid and has_right and not has_left:
-        return f"Obstacle ahead and on the right: {m_name}{dist_str}. Go left, path is clear on the left."
-    elif not has_mid and has_left and has_right:
-        return f"Obstacles on left ({l_name}) and right ({r_name}). Center path is clear, go straight."
+    elif has_left and not has_front and not has_right:
+        return f"Obstacle on your left: {l_name}. Path ahead is clear, continue straight."
+    elif has_right and not has_front and not has_left:
+        return f"Obstacle on your right: {r_name}. Path ahead is clear, continue straight."
+    elif has_front and not has_left and not has_right:
+        return f"{front_label.capitalize()} directly in front of you{dist_str}. Safe to go right or left."
+    elif has_front and has_left and not has_right:
+        return f"{front_label.capitalize()} in front of you and {l_name} on the left{dist_str}. Safe to go right."
+    elif has_front and has_right and not has_left:
+        return f"{front_label.capitalize()} in front of you and {r_name} on the right{dist_str}. Safe to go left."
+    elif not has_front and has_left and has_right:
+        return f"Obstacles on left ({l_name}) and right ({r_name}). Center path is clear, continue straight."
     else:
-        return f"Obstacles detected ahead ({m_name}), left, and right. Path blocked, please stop."
+        return f"Obstacles detected ahead ({front_label}), left, and right. Path blocked, please stop."
 
 
 if __name__ == "__main__":

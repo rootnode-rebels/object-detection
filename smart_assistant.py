@@ -104,17 +104,24 @@ def get_cpu_utilization():
 tts_process = None
 
 def speak(text):
-    """Speaks text asynchronously using espeak (Linux/Pi) or native OS speech without blocking."""
+    """Speaks text asynchronously using espeak-ng/espeak (Linux/Pi) or native OS speech without blocking."""
     global tts_process
+    if not text:
+        return
+
+    # Security: sanitize text to strictly allowed printable characters and punctuation
+    clean_text = "".join(ch for ch in text if ch.isalnum() or ch in " ,.!?:;'-()\"")
+    if not clean_text.strip():
+        return
+
     try:
-        print(f"[VOICE] SPEAKING: {text}")
+        print(f"[VOICE] SPEAKING: {clean_text}")
     except Exception:
         pass
 
     if sys.platform == "win32":
         def _win_speak():
-            clean_text = text.replace('"', '').replace("'", "")
-            # Thread-safe Windows SAPI direct speech (Fix for Finding F-03)
+            sanitized = clean_text.replace('"', '').replace("'", "")
             try:
                 import pythoncom
                 pythoncom.CoInitialize()
@@ -123,14 +130,13 @@ def speak(text):
 
             try:
                 import win32com.client
-                # SVSFlagsAsync (1) + SVSFPurgeBeforeSpeak (2): non-blocking & purges stale alerts
                 voice = win32com.client.Dispatch("SAPI.SpVoice")
-                voice.Speak(clean_text, 1 | 2)
+                voice.Speak(sanitized, 1 | 2)
                 return
             except Exception:
                 pass
 
-            # Fallback: File stream with asynchronous winsound
+            # Fallback
             try:
                 import winsound
                 import win32com.client
@@ -140,46 +146,50 @@ def speak(text):
                 stream = win32com.client.Dispatch("SAPI.SpFileStream")
                 stream.Open(temp_wav, 3, False)
                 voice.AudioOutputStream = stream
-                voice.Speak(clean_text, 0)
+                voice.Speak(sanitized, 0)
                 stream.Close()
                 winsound.PlaySound(temp_wav, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_PURGE)
                 return
             except Exception:
                 pass
 
-            # Ultimate fallback: PowerShell
-            try:
-                ps_cmd = f"Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; $s.Speak('{clean_text}')"
-                subprocess.run(["powershell", "-NoProfile", "-Command", ps_cmd], capture_output=True, timeout=5)
-            except Exception:
-                pass
-
         threading.Thread(target=_win_speak, daemon=True).start()
         return
 
+    # Linux / Raspberry Pi: Clean up prior process and reap zombies
     if tts_process is not None:
         try:
             if tts_process.poll() is None:
                 tts_process.terminate()
                 try:
-                    tts_process.wait(timeout=0.2)
+                    tts_process.wait(timeout=0.15)
                 except Exception:
                     pass
+            else:
+                # Reap finished child process to prevent zombie accumulation
+                tts_process.wait(timeout=0.05)
         except Exception:
             pass
 
-    try:
-        tts_process = subprocess.Popen(['espeak', '-ven+f3', '-s155', text])
-    except FileNotFoundError:
-        if sys.platform == "darwin":
-            try:
-                tts_process = subprocess.Popen(["say", text])
-                return
-            except Exception:
-                pass
-        print("[WARN] 'espeak' is not installed. Run: sudo apt install espeak")
-    except Exception as e:
-        print(f"[WARN] TTS error: {e}")
+    # Launch new speech without shell=True for strict command-injection prevention
+    for engine in ['espeak-ng', 'espeak']:
+        try:
+            tts_process = subprocess.Popen([engine, '-ven+f3', '-s160', '-p50', clean_text])
+            return
+        except FileNotFoundError:
+            continue
+        except Exception as e:
+            print(f"[WARN] TTS engine '{engine}' error: {e}")
+            break
+
+    if sys.platform == "darwin":
+        try:
+            tts_process = subprocess.Popen(["say", clean_text])
+            return
+        except Exception:
+            pass
+
+    print("[WARN] Neither 'espeak-ng' nor 'espeak' is installed. Run: sudo apt install espeak-ng -y")
 
 def stop_tts():
     """Terminates active speech upon exit."""
@@ -188,7 +198,7 @@ def stop_tts():
         try:
             if tts_process.poll() is None:
                 tts_process.terminate()
-                tts_process.wait(timeout=1.0)
+                tts_process.wait(timeout=0.5)
         except Exception:
             pass
         tts_process = None
@@ -201,45 +211,77 @@ class ThreadedCameraStream:
     """
     Continuously grabs frames in a background thread.
     Fixes OpenCV buffer delay so read() always returns the immediate live frame.
+    Includes V4L2 acceleration on Raspberry Pi and automatic device fallback.
     """
     def __init__(self, src=0, width=640, height=480):
-        self.cap = cv2.VideoCapture(src)
+        self.cap = None
         self.grabbed = False
         self.frame = None
         self.stopped = False
         self.lock = threading.Lock()
 
-        if self.cap.isOpened():
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-            self.grabbed, self.frame = self.cap.read()
+        # Try specified camera and fallback indices if needed
+        candidate_indices = [src]
+        for idx in [0, 1, 2]:
+            if idx not in candidate_indices:
+                candidate_indices.append(idx)
+
+        for dev_idx in candidate_indices:
+            try:
+                if sys.platform.startswith("linux"):
+                    self.cap = cv2.VideoCapture(dev_idx, cv2.CAP_V4L2)
+                else:
+                    self.cap = cv2.VideoCapture(dev_idx)
+
+                if self.cap is not None and self.cap.isOpened():
+                    self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+                    self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+                    grabbed, frame = self.cap.read()
+                    if grabbed and frame is not None:
+                        self.grabbed = grabbed
+                        self.frame = frame
+                        print(f"[INFO] Camera stream successfully opened on device index {dev_idx}")
+                        break
+                    else:
+                        self.cap.release()
+            except Exception:
+                if self.cap is not None:
+                    try: self.cap.release()
+                    except Exception: pass
+
+        if self.cap is not None and self.cap.isOpened():
             self.thread = threading.Thread(target=self._update, daemon=True)
             self.thread.start()
+        else:
+            print(f"[WARN] Could not open camera on indices {candidate_indices}. Check connection.")
 
     def _update(self):
         while not self.stopped:
-            grabbed, frame = self.cap.read()
-            if not grabbed:
-                time.sleep(0.005)
+            if self.cap is None or not self.cap.isOpened():
+                time.sleep(0.02)
                 continue
+            grabbed, frame = self.cap.read()
             with self.lock:
-                self.grabbed = grabbed
-                self.frame = frame
+                self.grabbed = bool(grabbed and frame is not None)
+                if self.grabbed:
+                    self.frame = frame
+            if not grabbed:
+                time.sleep(0.01)
 
     def read(self):
         with self.lock:
-            if self.frame is None:
+            if not self.grabbed or self.frame is None:
                 return False, None
-            return self.grabbed, self.frame.copy()
+            return True, self.frame.copy()
 
     def is_opened(self):
-        return self.cap.isOpened()
+        return self.cap is not None and self.cap.isOpened() and self.grabbed
 
     def stop(self):
         self.stopped = True
         if hasattr(self, 'thread') and self.thread.is_alive():
             self.thread.join(timeout=1.0)
-        if self.cap.isOpened():
+        if self.cap is not None and self.cap.isOpened():
             self.cap.release()
 
 
@@ -292,19 +334,33 @@ def main():
         input_size=(args.resolution, args.resolution)
     )
 
+    if detector.net is None:
+        err_msg = "Error: AI vision model failed to load. Please check model files."
+        print(f"[ERROR] {err_msg}")
+        speak(err_msg)
+        time.sleep(3.5)
+        sys.exit(1)
+
     # Initialize Camera
     print("[INFO] Starting Threaded Camera Stream...")
     cam = ThreadedCameraStream(src=args.camera, width=640, height=480)
     time.sleep(1.5)  # Warmup
 
     if not cam.is_opened():
-        print("[ERROR] Failed to open camera device. Please verify camera connection.")
+        err_msg = "Warning: camera device not detected. Please verify camera cable connection."
+        print(f"[ERROR] {err_msg}")
+        speak(err_msg)
+        time.sleep(3.5)
         sys.exit(1)
 
-    speak("AI vision system ready.")
+    startup_msg = "Smart vision assistant ready. Obstacle radar active."
+    speak(startup_msg)
 
     last_scan_time = time.time()
-    current_announcement = "AI vision system ready."
+    last_button_time = 0.0
+    last_valid_frame_time = time.time()
+    camera_lost_alerted = False
+    current_announcement = startup_msg
     COOLDOWN = 3.0  # Cooldown between voice alerts
     frame_count = 0
     fps_start_time = time.time()
@@ -314,8 +370,17 @@ def main():
         while True:
             ret, frame = cam.read()
             if not ret or frame is None:
-                time.sleep(0.005)
+                if time.time() - last_valid_frame_time > 3.0:
+                    if not camera_lost_alerted:
+                        speak("Warning: camera feed lost. Please stop and check camera connection.")
+                        camera_lost_alerted = True
+                time.sleep(0.01)
                 continue
+
+            last_valid_frame_time = time.time()
+            if camera_lost_alerted:
+                speak("Camera feed restored. Obstacle detection resumed.")
+                camera_lost_alerted = False
 
             frame_count += 1
             elapsed = time.time() - fps_start_time
@@ -324,32 +389,46 @@ def main():
                 frame_count = 0
                 fps_start_time = time.time()
 
-            # Run YOLOv8 detection on CPU
-            detections = detector.detect(frame)
-
-            # Read proximity sensors
+            # Read proximity sensors first for multi-modal sensor fusion
             distance_meters = get_distance()
-            button_pressed = is_button_pressed()
+            button_raw = is_button_pressed()
+            button_pressed = False
+            if button_raw and (time.time() - last_button_time > 1.8):
+                button_pressed = True
+                last_button_time = time.time()
+
+            # Run YOLOv8 detection on CPU with multi-frame approach tracking
+            detections = detector.detect(frame, distance_meters=distance_meters)
 
             # Trigger condition: Obstacle detected in camera view OR distance < 1.0m OR Button pressed
             has_obstacle = (len(detections) > 0) or (distance_meters < 1.0)
+            has_approaching = any(d.get("is_approaching", False) for d in detections)
+            is_emergency = has_approaching or (distance_meters < 1.0)
             time_since_last_alert = time.time() - last_scan_time
 
-            candidate_announcement = format_spatial_announcement(detections, distance_meters=distance_meters)
+            # Format announcement: tactile button triggers comprehensive on-demand scan
+            candidate_announcement = format_spatial_announcement(
+                detections,
+                distance_meters=distance_meters,
+                is_full_scan=button_pressed
+            )
             state_changed = (candidate_announcement != current_announcement)
 
-            # Fix for Finding F-01 (Silent Recovery Bug):
-            # Alert immediately if button pressed, or when navigation state changes
-            # (e.g., path clears or new obstacle appears) with 1.5s debouncing,
-            # or if an obstacle persists and the periodic reminder cooldown expires.
-            should_alert = button_pressed or (state_changed and time_since_last_alert > 1.5) or (has_obstacle and time_since_last_alert > COOLDOWN)
+            # Fast response for blind safety:
+            # - Instant alert on button press or emergency (approaching hazard / <1.0m)
+            # - Fast 1.2s debouncing on normal navigation state changes
+            # - Periodic reminder cooldown if obstacle persists
+            should_alert = button_pressed or (state_changed and (is_emergency or time_since_last_alert > 1.2)) or (has_obstacle and time_since_last_alert > COOLDOWN)
 
             if should_alert:
                 current_announcement = candidate_announcement
                 if button_pressed:
-                    trigger_reason = "Button Pressed (Tactile Scan)"
+                    trigger_reason = "Tactile Button Pressed (Full Surroundings Scan)"
+                elif has_approaching:
+                    app_names = [d["class"] for d in detections if d.get("is_approaching")]
+                    trigger_reason = f"Approaching Hazard: {', '.join(app_names)}"
                 elif len(detections) > 0:
-                    trigger_reason = f"Obstacle Alert ({len(detections)} detected)"
+                    trigger_reason = f"Obstacle Alert ({detections[0]['class']} in view)"
                 elif distance_meters < 1.0:
                     trigger_reason = f"Proximity Alert ({distance_meters:.2f}m)"
                 else:
@@ -378,17 +457,26 @@ def main():
                 cv2.line(frame, (0, row1), (w, row1), grid_color, 1, cv2.LINE_AA)
                 cv2.line(frame, (0, row2), (w, row2), grid_color, 1, cv2.LINE_AA)
 
-                # Draw bounding boxes colored by spatial zone
+                # Draw bounding boxes colored by approaching status and spatial zone
                 for det in detections:
                     box = det["box"]
                     z = det.get("zone", "middle-center")
-                    if "middle" in z or "center" in z:
+                    is_app = det.get("is_approaching", False)
+                    app_spd = det.get("approach_speed")
+
+                    if is_app:
+                        color = (0, 0, 255) if app_spd == "fast" else (0, 140, 255)
+                        label = f"[APPROACHING] {det['class']} ({app_spd or 'steady'})"
+                    elif "middle" in z or "center" in z:
                         color = (0, 80, 255)  # Orange/Red for center/ahead
+                        label = f"{det['class']} ({z})"
                     elif "left" in z:
                         color = (255, 180, 0)  # Cyan/Blue
+                        label = f"{det['class']} ({z})"
                     else:
                         color = (0, 220, 100)  # Green
-                    label = f"{det['class']} ({z})"
+                        label = f"{det['class']} ({z})"
+
                     cv2.rectangle(frame, (box[0], box[1]), (box[2], box[3]), color, 2)
                     cv2.putText(frame, label, (box[0], max(20, box[1] - 8)),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
@@ -398,10 +486,18 @@ def main():
                             (10, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (0, 255, 0), 2)
                 cv2.putText(frame, f"FPS: {current_fps:.1f} | CPU: {cpu_load:.1f}%",
                             (10, 44), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 255), 2)
+                dist_color = (0, 0, 255) if distance_meters < 1.0 else (0, 255, 255)
                 cv2.putText(frame, f"Distance: {distance_meters:.2f}m",
-                            (10, 66), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (0, 255, 255), 2)
-                cv2.putText(frame, "9-Part Grid: [TOP 3 | MID 3 | LOW 3]",
-                            (10, 88), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
+                            (10, 66), cv2.FONT_HERSHEY_SIMPLEX, 0.52, dist_color, 2)
+                app_badge = "RADAR: APPROACHING HAZARD!" if has_approaching else "RADAR: MONITORING"
+                app_badge_color = (0, 0, 255) if has_approaching else (200, 200, 200)
+                cv2.putText(frame, app_badge,
+                            (10, 88), cv2.FONT_HERSHEY_SIMPLEX, 0.45, app_badge_color, 1)
+
+                # Bottom Voice Transcript Banner
+                cv2.rectangle(frame, (0, h - 35), (w, h), (20, 25, 35), -1)
+                cv2.putText(frame, f"VOICE: \"{current_announcement}\"",
+                            (10, h - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 180), 1)
 
                 cv2.imshow("Raspberry Pi 5 Object Detection", frame)
                 if cv2.waitKey(1) & 0xFF == ord('q'):

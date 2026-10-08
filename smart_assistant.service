@@ -1,0 +1,17 @@
+[Unit]
+Description=Smart Vision Assistant for Visually Impaired
+After=multi-user.target sound.target network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/object-detection
+ExecStart=/usr/bin/python3 /home/pi/object-detection/smart_assistant.py --headless --resolution 320
+Restart=always
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
