@@ -816,6 +816,7 @@
     let lastNeuralTime = 0;
     let trackedLabel = "PERSON";
     let trackedScore = 95;
+    let liveDetections = []; // All currently tracked objects with individual bounding boxes, sectors, and distances
 
     // Fast fallback processor canvas
     const procCanvas = document.createElement('canvas');
@@ -868,24 +869,60 @@
 
         const now = Date.now();
 
-        // 2. High-Level Neural Inference (Every 100ms when COCO-SSD is available)
-        if (cocoModel && !isNeuralDetecting && (now - lastNeuralTime > 100)) {
+        // 2. High-Level Neural Inference (Every 90ms when COCO-SSD is available)
+        if (cocoModel && !isNeuralDetecting && (now - lastNeuralTime > 90)) {
           isNeuralDetecting = true;
           lastNeuralTime = now;
           cocoModel.detect(videoEl).then(predictions => {
             isNeuralDetecting = false;
             if (predictions && predictions.length > 0) {
-              // Prefer person, or highest scoring object
-              let best = predictions.find(p => p.class === 'person') || predictions[0];
-              if (best && best.score > 0.4) {
-                targetBox.x = best.bbox[0];
-                targetBox.y = best.bbox[1];
-                targetBox.w = Math.max(100, best.bbox[2]);
-                targetBox.h = Math.max(120, best.bbox[3]);
-                trackedLabel = best.class.toUpperCase();
-                trackedScore = Math.round(best.score * 100);
+              const valid = predictions.filter(p => p.score > 0.35);
+              if (valid.length > 0) {
+                // Priority: Sort by bounding box area (width * height) descending!
+                // The person closest to the camera is in the foreground and has the largest bounding box area.
+                valid.sort((a, b) => (b.bbox[2] * b.bbox[3]) - (a.bbox[2] * a.bbox[3]));
+
+                liveDetections = valid.map((p, idx) => {
+                  const bx = Math.max(0, p.bbox[0]);
+                  const by = Math.max(0, p.bbox[1]);
+                  const bw = Math.min(w, p.bbox[2]);
+                  const bh = Math.min(h, p.bbox[3]);
+                  const cx = bx + bw / 2;
+                  const cy = by + bh / 2;
+                  const col = cx < (w / 3) ? 'left' : (cx > (2 * w / 3) ? 'right' : 'middle');
+                  const row = cy < (h / 3) ? 'top' : (cy > (2 * h / 3) ? 'bottom' : 'middle');
+                  const sec = (row === 'middle' && col === 'middle') ? 'middle-center' : `${row}-${col}`;
+                  const objDist = Math.max(0.4, Math.min(3.0, 340.0 / Math.max(90, bh)));
+
+                  return {
+                    isPrimary: idx === 0,
+                    class: p.class.toUpperCase(),
+                    score: Math.round(p.score * 100),
+                    x: bx,
+                    y: by,
+                    w: bw,
+                    h: bh,
+                    cx: cx,
+                    cy: cy,
+                    sector: sec,
+                    distance: objDist
+                  };
+                });
+
+                // Primary target is the foreground object (index 0 - closest / largest)
+                const prim = liveDetections[0];
+                targetBox.x = prim.x;
+                targetBox.y = prim.y;
+                targetBox.w = prim.w;
+                targetBox.h = prim.h;
+                trackedLabel = prim.class;
+                trackedScore = prim.score;
                 hasDetectedEver = true;
+              } else {
+                liveDetections = [];
               }
+            } else {
+              liveDetections = [];
             }
           }).catch(() => { isNeuralDetecting = false; });
         }
@@ -958,7 +995,7 @@
         smoothBox.x = Math.max(0, Math.min(w - smoothBox.w, smoothBox.x));
         smoothBox.y = Math.max(0, Math.min(h - smoothBox.h, smoothBox.y));
 
-        // 5. Calculate Centroid & 9-Part Sector
+        // 5. Calculate Centroid & 9-Part Sector for Primary Target
         const cx = smoothBox.x + smoothBox.w / 2;
         const cy = smoothBox.y + smoothBox.h / 2;
 
@@ -966,18 +1003,32 @@
         const row = cy < (h / 3) ? 'top' : (cy > (2 * h / 3) ? 'bottom' : 'middle');
         detectedSector = (row === 'middle' && col === 'middle') ? 'middle-center' : `${row}-${col}`;
 
-        // 6. Dynamic Ultrasonic Radar Distance from Bounding Box Size
-        // Leaning closer -> larger box -> distance drops to 0.4m
-        // Sitting back -> smaller box -> distance expands to ~2.4m
+        // 6. Dynamic Ultrasonic Radar Distance for Primary Target
         const targetDist = Math.max(0.4, Math.min(2.8, 340.0 / Math.max(110, smoothBox.h)));
         distance = distance * 0.82 + targetDist * 0.18;
 
         document.getElementById('distVal').innerText = `${distance.toFixed(2)} m`;
         document.getElementById('telemDist').innerText = `${distance.toFixed(2)} m`;
         document.getElementById('distSlider').value = distance;
-        document.getElementById('detectionCountBadge').innerText = `1 Object Tracked (${trackedLabel}: ${detectedSector.toUpperCase()})`;
+        
+        const countMsg = liveDetections.length > 1
+          ? `${liveDetections.length} Objects Tracked (★ ${trackedLabel}: ${detectedSector.toUpperCase()}, ${liveDetections.length - 1} Background)`
+          : `1 Object Tracked (★ ${trackedLabel}: ${detectedSector.toUpperCase()})`;
+        document.getElementById('detectionCountBadge').innerText = countMsg;
 
-        // 7. Highlight Active Sector Cell in 9-Part Grid with Glowing Tint
+        // 7. Highlight Active Sector Cells in 9-Part Grid
+        // A. Highlight secondary sectors in soft purple
+        liveDetections.slice(1).forEach(secObj => {
+          const sCol = secObj.sector.includes('left') ? 0 : (secObj.sector.includes('right') ? 2 : 1);
+          const sRow = secObj.sector.includes('top') ? 0 : (secObj.sector.includes('bottom') ? 2 : 1);
+          ctx.fillStyle = 'rgba(192, 132, 252, 0.16)';
+          ctx.fillRect(sCol * (w / 3), sRow * (h / 3), w / 3, h / 3);
+          ctx.strokeStyle = 'rgba(192, 132, 252, 0.5)';
+          ctx.lineWidth = 1.5;
+          ctx.strokeRect(sCol * (w / 3), sRow * (h / 3), w / 3, h / 3);
+        });
+
+        // B. Highlight primary sector prominently (glowing red if <1m, cyan if clear)
         const colIdx = col === 'left' ? 0 : (col === 'right' ? 2 : 1);
         const rowIdx = row === 'top' ? 0 : (row === 'bottom' ? 2 : 1);
         const cellX = colIdx * (w / 3);
@@ -985,7 +1036,7 @@
         const cellColor = distance < 1.0 ? 'rgba(239, 68, 68, 0.28)' : 'rgba(56, 189, 248, 0.2)';
         ctx.fillStyle = cellColor;
         ctx.fillRect(cellX, cellY, w / 3, h / 3);
-        ctx.strokeStyle = distance < 1.0 ? 'rgba(239, 68, 68, 0.8)' : 'rgba(56, 189, 248, 0.7)';
+        ctx.strokeStyle = distance < 1.0 ? 'rgba(239, 68, 68, 0.85)' : 'rgba(56, 189, 248, 0.75)';
         ctx.lineWidth = 2.5;
         ctx.strokeRect(cellX, cellY, w / 3, h / 3);
 
@@ -999,7 +1050,24 @@
         ctx.moveTo(0, (2 * h) / 3); ctx.lineTo(w, (2 * h) / 3);
         ctx.stroke();
 
-        // 9. Draw Dynamic Detected Bounding Box & Corner Brackets
+        // 9. Draw Secondary Background Obstacles (e.g. Person behind you, chairs)
+        liveDetections.slice(1).forEach(secObj => {
+          ctx.save();
+          ctx.strokeStyle = '#c084fc';
+          ctx.lineWidth = 1.8;
+          ctx.setLineDash([5, 4]);
+          ctx.strokeRect(secObj.x, secObj.y, secObj.w, secObj.h);
+          ctx.setLineDash([]);
+          
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
+          ctx.fillRect(secObj.x, Math.max(18, secObj.y - 18), 160, 18);
+          ctx.fillStyle = '#c084fc';
+          ctx.font = 'bold 10px "JetBrains Mono"';
+          ctx.fillText(`[BG] ${secObj.class} (${secObj.score}%) ${secObj.distance.toFixed(1)}m`, secObj.x + 4, Math.max(31, secObj.y - 5));
+          ctx.restore();
+        });
+
+        // 10. Draw Dynamic Primary Target Bounding Box & Corner Brackets (Foreground User / Closest Obstacle)
         const boxColor = distance < 1.0 ? '#ef4444' : '#10b981';
         ctx.strokeStyle = boxColor;
         ctx.lineWidth = 2;
@@ -1019,44 +1087,51 @@
         ctx.moveTo(smoothBox.x + smoothBox.w - cl, smoothBox.y + smoothBox.h); ctx.lineTo(smoothBox.x + smoothBox.w, smoothBox.y + smoothBox.h); ctx.lineTo(smoothBox.x + smoothBox.w, smoothBox.y + smoothBox.h - cl);
         ctx.stroke();
 
-        // Tag Label Pill
+        // Primary Tag Pill
         ctx.fillStyle = boxColor;
         ctx.font = 'bold 12px "JetBrains Mono"';
-        const labelText = `${trackedLabel} (${trackedScore}%) [${detectedSector.toUpperCase().replace('-', ' ')}] ${distance.toFixed(1)}m`;
+        const labelText = `★ PRIMARY: ${trackedLabel} (${trackedScore}%) [${detectedSector.toUpperCase().replace('-', ' ')}] ${distance.toFixed(1)}m`;
         ctx.fillText(labelText, smoothBox.x, Math.max(22, smoothBox.y - 8));
 
-        // 10. Top Status Bar
+        // 11. Top Status Bar
         ctx.fillStyle = 'rgba(10, 15, 25, 0.88)';
         ctx.fillRect(0, 0, w, 28);
         ctx.fillStyle = '#ffffff';
         ctx.font = 'bold 11px "JetBrains Mono"';
         const statusText = distance < 1.0 ? 'PROXIMITY ALERT ⚠' : 'CLEAR PATH ✓';
-        ctx.fillText(`LIVE CAMERA | RADAR: ${distance.toFixed(2)}m [${statusText}] | SECTOR: ${detectedSector.toUpperCase()}`, 10, 18);
+        const targetsInfo = liveDetections.length > 1 ? ` | TARGETS: ${liveDetections.length}` : '';
+        ctx.fillText(`LIVE CAMERA | RADAR: ${distance.toFixed(2)}m [${statusText}]${targetsInfo} | SECTOR: ${detectedSector.toUpperCase()}`, 10, 18);
 
-        // 11. 9 Sector Badges with Dynamic Highlight
+        // 12. 9 Sector Badges with Dynamic Priority Color
+        const getSectorBadgeColor = (secName, defaultCol) => {
+          if (detectedSector === secName) return distance < 1.0 ? '#ef4444' : '#10b981';
+          if (liveDetections.some(o => o.sector === secName)) return '#c084fc';
+          return defaultCol;
+        };
+
         ctx.font = 'bold 11px "Plus Jakarta Sans"';
-        ctx.fillStyle = detectedSector === 'top-left' ? '#f43f5e' : '#c084fc';
+        ctx.fillStyle = getSectorBadgeColor('top-left', '#c084fc');
         ctx.fillText('TOP-L [7]', 10, 48);
-        ctx.fillStyle = detectedSector === 'top-middle' ? '#f43f5e' : '#c084fc';
+        ctx.fillStyle = getSectorBadgeColor('top-middle', '#c084fc');
         ctx.fillText('TOP-AHEAD (OVERHEAD) [8]', w / 3 + 10, 48);
-        ctx.fillStyle = detectedSector === 'top-right' ? '#f43f5e' : '#c084fc';
+        ctx.fillStyle = getSectorBadgeColor('top-right', '#c084fc');
         ctx.fillText('TOP-R [9]', (2 * w) / 3 + 10, 48);
 
-        ctx.fillStyle = detectedSector === 'middle-left' ? '#f43f5e' : '#38bdf8';
+        ctx.fillStyle = getSectorBadgeColor('middle-left', '#38bdf8');
         ctx.fillText('MID-LEFT [4]', 10, h / 3 + 24);
-        ctx.fillStyle = detectedSector === 'middle-center' ? (distance < 1.0 ? '#ef4444' : '#10b981') : '#94a3b8';
+        ctx.fillStyle = getSectorBadgeColor('middle-center', '#38bdf8');
         ctx.fillText(`DIRECTLY AHEAD [5] ${distance < 1.0 ? '⚠' : '✓'}`, w / 3 + 10, h / 3 + 24);
-        ctx.fillStyle = detectedSector === 'middle-right' ? '#f43f5e' : '#38bdf8';
+        ctx.fillStyle = getSectorBadgeColor('middle-right', '#38bdf8');
         ctx.fillText('MID-RIGHT [6]', (2 * w) / 3 + 10, h / 3 + 24);
 
-        ctx.fillStyle = detectedSector === 'bottom-left' ? '#f43f5e' : '#f59e0b';
+        ctx.fillStyle = getSectorBadgeColor('bottom-left', '#f59e0b');
         ctx.fillText('LOW-LEFT [1]', 10, (2 * h) / 3 + 24);
-        ctx.fillStyle = detectedSector === 'bottom-middle' ? '#f43f5e' : '#f59e0b';
+        ctx.fillStyle = getSectorBadgeColor('bottom-middle', '#f59e0b');
         ctx.fillText('LOW-AHEAD (TRIP HAZARD) [2]', w / 3 + 10, (2 * h) / 3 + 24);
-        ctx.fillStyle = detectedSector === 'bottom-right' ? '#f43f5e' : '#f59e0b';
+        ctx.fillStyle = getSectorBadgeColor('bottom-right', '#f59e0b');
         ctx.fillText('LOW-RIGHT [3]', (2 * w) / 3 + 10, (2 * h) / 3 + 24);
 
-        // 12. Autonomous Voice Alert When Approaching Danger Zone (< 1.0m)
+        // 13. Autonomous Voice Alert When Approaching Danger Zone (< 1.0m)
         if (distance < 1.0 && now - lastSpokenTime > 4000) {
           lastSpokenTime = now;
           let warnMsg = `Obstacle directly ahead at ${distance.toFixed(1)} meters. Go right or go left.`;
@@ -1258,9 +1333,15 @@
       }
 
       const secName = detectedSector.toUpperCase().replace('-', ' ');
-      let msg = distance < 1.0
-        ? `Proximity alert! ${trackedLabel} directly in ${secName} at ${distance.toFixed(1)} meters. Immediate collision hazard. Step aside.`
-        : `Path scan: ${trackedLabel} detected in ${secName} at ${distance.toFixed(1)} meters. Clearance safe.`;
+      let msg = "";
+      if (liveDetections.length > 1) {
+        const bgList = liveDetections.slice(1).map(o => `${o.class} in ${o.sector.toUpperCase().replace('-', ' ')} at ${o.distance.toFixed(1)}m`).join(', ');
+        msg = `Spatial scan: Primary obstacle ${trackedLabel} directly in ${secName} at ${distance.toFixed(1)} meters. Also detected: ${bgList}.`;
+      } else if (distance < 1.0) {
+        msg = `Proximity alert! ${trackedLabel} directly in ${secName} at ${distance.toFixed(1)} meters. Immediate collision hazard. Step aside.`;
+      } else {
+        msg = `Path scan: ${trackedLabel} detected in ${secName} at ${distance.toFixed(1)} meters. Clearance safe.`;
+      }
       updateAnnouncement('SPATIAL SCAN', msg);
       logMessage('TRIGGER', `Button Pressed (Scan) -> "${msg}"`);
       speakWeb(msg);
@@ -1295,12 +1376,19 @@
       const label = sectorLabels[sec] || sec.toUpperCase();
 
       let text = "";
-      if (detectedSector === sec) {
-        if (distance < 1.0) {
-          text = `Warning! ${trackedLabel} obstacle detected in ${label} at ${distance.toFixed(1)} meters! Step aside.`;
+      const found = liveDetections.find(o => o.sector === sec);
+      if (found) {
+        if (found.isPrimary) {
+          if (distance < 1.0) {
+            text = `Warning! Primary obstacle ${found.class} directly in ${label} at ${distance.toFixed(1)} meters! Step aside.`;
+          } else {
+            text = `Primary obstacle detected: ${found.class} in ${label} at ${distance.toFixed(1)} meters.`;
+          }
         } else {
-          text = `Obstacle detected: ${trackedLabel} in ${label} at ${distance.toFixed(1)} meters.`;
+          text = `Background obstacle detected: ${found.class} in ${label} at ${found.distance.toFixed(1)} meters.`;
         }
+      } else if (detectedSector === sec) {
+        text = `Obstacle detected in ${label} at ${distance.toFixed(1)} meters.`;
       } else {
         text = `${label} sector is clear. Safe to navigate.`;
       }
