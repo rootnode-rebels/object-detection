@@ -366,29 +366,42 @@ def main():
                 x_right = int(w * 0.65)
                 cpu_load = get_cpu_utilization()
 
-                # Draw Spatial Zone Dividers
-                cv2.line(frame, (x_left, 0), (x_left, h), (60, 70, 80), 1, cv2.LINE_AA)
-                cv2.line(frame, (x_right, 0), (x_right, h), (60, 70, 80), 1, cv2.LINE_AA)
+                # Draw 9-Part Spatial Grid (Top 3, Middle 3, Bottom 3)
+                col1 = int(w / 3.0)
+                col2 = int((2.0 * w) / 3.0)
+                row1 = int(h / 3.0)
+                row2 = int((2.0 * h) / 3.0)
+
+                grid_color = (60, 70, 80)
+                cv2.line(frame, (col1, 0), (col1, h), grid_color, 1, cv2.LINE_AA)
+                cv2.line(frame, (col2, 0), (col2, h), grid_color, 1, cv2.LINE_AA)
+                cv2.line(frame, (0, row1), (w, row1), grid_color, 1, cv2.LINE_AA)
+                cv2.line(frame, (0, row2), (w, row2), grid_color, 1, cv2.LINE_AA)
 
                 # Draw bounding boxes colored by spatial zone
                 for det in detections:
                     box = det["box"]
-                    z = det.get("zone", "middle")
-                    color = (0, 80, 255) if z == "middle" else ((255, 180, 0) if z == "left" else (0, 220, 100))
+                    z = det.get("zone", "middle-center")
+                    if "middle" in z or "center" in z:
+                        color = (0, 80, 255)  # Orange/Red for center/ahead
+                    elif "left" in z:
+                        color = (255, 180, 0)  # Cyan/Blue
+                    else:
+                        color = (0, 220, 100)  # Green
                     label = f"{det['class']} ({z})"
                     cv2.rectangle(frame, (box[0], box[1]), (box[2], box[3]), color, 2)
                     cv2.putText(frame, label, (box[0], max(20, box[1] - 8)),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
 
                 # Draw Telemetry HUD
                 cv2.putText(frame, f"Mode: CPU YOLOv8 ({args.resolution}x{args.resolution})",
-                            (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                            (10, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (0, 255, 0), 2)
                 cv2.putText(frame, f"FPS: {current_fps:.1f} | CPU: {cpu_load:.1f}%",
-                            (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                            (10, 44), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 255), 2)
                 cv2.putText(frame, f"Distance: {distance_meters:.2f}m",
-                            (10, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-                cv2.putText(frame, "Zones: [ LEFT | MIDDLE | RIGHT ]",
-                            (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+                            (10, 66), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (0, 255, 255), 2)
+                cv2.putText(frame, "9-Part Grid: [TOP 3 | MID 3 | LOW 3]",
+                            (10, 88), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
 
                 cv2.imshow("Raspberry Pi 5 Object Detection", frame)
                 if cv2.waitKey(1) & 0xFF == ord('q'):

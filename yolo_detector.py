@@ -213,17 +213,44 @@ class YOLODetector:
                 cid = class_ids[idx]
                 class_name = self.classes[cid] if cid < len(self.classes) else f"object_{cid}"
 
-                # Calculate spatial direction (Left, Middle, Right)
+                # 9-Zone Spatial Partitioning (Top 3, Middle 3, Bottom 3)
                 center_x = (x1 + x2) / 2.0
-                if center_x < orig_w * 0.35:
-                    direction = "on your left"
-                    zone = "left"
-                elif center_x > orig_w * 0.65:
-                    direction = "on your right"
-                    zone = "right"
+                center_y = (y1 + y2) / 2.0
+
+                # Column (Horizontal: Left, Middle, Right)
+                if center_x < orig_w / 3.0:
+                    col = "left"
+                    col_label = "on your left"
+                elif center_x > (orig_w * 2.0) / 3.0:
+                    col = "right"
+                    col_label = "on your right"
                 else:
-                    direction = "in the middle"
-                    zone = "middle"
+                    col = "middle"
+                    col_label = "directly ahead"
+
+                # Row (Vertical: Top/Overhead, Middle/Chest, Bottom/Ground)
+                if center_y < orig_h / 3.0:
+                    row = "top"
+                    row_label = "overhead"
+                elif center_y > (orig_h * 2.0) / 3.0:
+                    row = "bottom"
+                    row_label = "ground level"
+                else:
+                    row = "middle"
+                    row_label = "chest level"
+
+                if row == "middle" and col == "middle":
+                    zone = "middle-center"
+                    direction = "directly ahead"
+                elif row == "middle":
+                    zone = f"middle-{col}"
+                    direction = col_label
+                elif col == "middle":
+                    zone = f"{row}-middle"
+                    direction = f"{row_label} ahead"
+                else:
+                    zone = f"{row}-{col}"
+                    direction = f"{row_label} {col_label}"
 
                 detections.append({
                     "class": class_name,
@@ -231,8 +258,10 @@ class YOLODetector:
                     "box": [x1, y1, x2, y2],
                     "direction": direction,
                     "zone": zone,
+                    "row": row,
+                    "col": col,
                     "center_x": center_x,
-                    "center_y": (y1 + y2) / 2.0
+                    "center_y": center_y
                 })
 
         detections.sort(key=lambda d: d["confidence"], reverse=True)
@@ -245,86 +274,118 @@ class YOLODetector:
 
 def format_spatial_announcement(detections, distance_meters=None, target_zone=None):
     """
-    Constructs actionable spatial navigation voice guidance for visually impaired navigation:
-    Tells the user WHAT obstacle is detected, WHERE it is, and WHICH DIRECTION to move.
+    Constructs actionable spatial navigation voice guidance across the 9-part grid:
+    Top Row:    top-left    | top-middle (overhead)     | top-right
+    Middle Row: middle-left | middle-center (ahead)    | middle-right
+    Bottom Row: bottom-left | bottom-middle (ground)    | bottom-right
     
     :param detections: List of detection dictionaries from YOLODetector.detect()
     :param distance_meters: Optional ultrasonic distance reading in meters
-    :param target_zone: Optional filter ('left', 'middle', 'right') for targeted sector queries
+    :param target_zone: Optional filter (e.g. 'top-left', 'middle-center', 'bottom-middle', or 'left'/'middle'/'right')
     """
-    # Group unique object labels by zone
-    zones = {"middle": [], "left": [], "right": []}
+    # 9 spatial zones dictionary
+    zones = {
+        "top-left": [], "top-middle": [], "top-right": [],
+        "middle-left": [], "middle-center": [], "middle-right": [],
+        "bottom-left": [], "bottom-middle": [], "bottom-right": []
+    }
+    
+    # Map detections into 9 zones
     for d in (detections or []):
-        z = d.get("zone", "middle")
+        z = d.get("zone", "middle-center")
+        # Backwards compatible mapping if old 3-zone names appear
+        if z == "middle": z = "middle-center"
+        elif z == "left": z = "middle-left"
+        elif z == "right": z = "middle-right"
+
         if z in zones and d["class"] not in [item["class"] for item in zones[z]]:
             zones[z].append(d)
 
     # Consider middle blocked if ultrasonic distance is under 1.0m
     middle_proximity = (distance_meters is not None and distance_meters < 1.0)
-    has_mid = bool(zones["middle"]) or middle_proximity
-    has_left = bool(zones["left"])
-    has_right = bool(zones["right"])
+    has_mid = bool(zones["middle-center"]) or middle_proximity
+    has_low_ahead = bool(zones["bottom-middle"])
+    has_overhead = bool(zones["top-middle"])
 
-    # Only announce distance if an actual obstacle is within proximity (< 3.0m)
-    # Default 3.0m indicates no echo / clear path and should not be verbalized as a detected distance
     dist_str = f" at {distance_meters:.1f} meters" if (distance_meters is not None and distance_meters < 3.0) else ""
 
-    # 1. Single-sector targeted query ([L], [M], [R])
+    # 1. Single Targeted Query for any of the 9 zones
     if target_zone:
-        label = "in the middle" if target_zone == "middle" else f"on the {target_zone}"
-        items = zones.get(target_zone, [])
-        if target_zone == "middle" and middle_proximity and not items:
-            return f"Obstacle directly ahead{dist_str}. Step aside to the left or right."
-        if not items:
-            return f"Path {label} is clear."
-        names = " and ".join([it["class"] for it in items[:2]])
-        if target_zone == "middle":
+        # Alias normalization
+        tz = target_zone.lower()
+        if tz in ["middle", "ahead", "center"]: tz = "middle-center"
+        elif tz == "left": tz = "middle-left"
+        elif tz == "right": tz = "middle-right"
+        elif tz in ["top", "overhead"]: tz = "top-middle"
+        elif tz in ["bottom", "ground", "low"]: tz = "bottom-middle"
+
+        items = zones.get(tz, [])
+        names = " and ".join([it["class"] for it in items[:2]]) if items else None
+
+        zone_names = {
+            "top-left": "Top-left overhead",
+            "top-middle": "Top-overhead ahead",
+            "top-right": "Top-right overhead",
+            "middle-left": "Middle left",
+            "middle-center": "Directly ahead",
+            "middle-right": "Middle right",
+            "bottom-left": "Ground level on the left",
+            "bottom-middle": "Ground level directly ahead",
+            "bottom-right": "Ground level on the right"
+        }
+        z_label = zone_names.get(tz, tz)
+
+        if not names:
+            if tz == "middle-center" and middle_proximity:
+                return f"Obstacle directly ahead{dist_str}. Step aside to the left or right."
+            return f"{z_label} is clear."
+        
+        if tz == "bottom-middle":
+            return f"Low obstacle directly ahead on the ground: {names}{dist_str}. Watch your step."
+        elif tz == "top-middle":
+            return f"Overhead obstacle directly ahead: {names}. Watch your head."
+        elif tz == "middle-center":
             return f"Obstacle directly ahead: {names}{dist_str}. Go right or go left."
-        elif target_zone == "left":
-            return f"Obstacle on the left: {names}. Go right."
+        elif "left" in tz:
+            return f"Obstacle on the {tz.replace('-', ' ')}: {names}. Safe to go right."
         else:
-            return f"Obstacle on the right: {names}. Go left."
+            return f"Obstacle on the {tz.replace('-', ' ')}: {names}. Safe to go left."
 
-    # 2. Comprehensive Navigation Guidance
-    m_name = (" and ".join([it["class"] for it in zones["middle"][:2]])) if zones["middle"] else ("obstacle" if middle_proximity else None)
-    l_name = (" and ".join([it["class"] for it in zones["left"][:2]])) if zones["left"] else None
-    r_name = (" and ".join([it["class"] for it in zones["right"][:2]])) if zones["right"] else None
+    # 2. Priority Navigation Announcement (Overhead, Ground Hazards, Path Obstacles)
+    # Check Ground Trip Hazards
+    if has_low_ahead:
+        low_names = " and ".join([it["class"] for it in zones["bottom-middle"][:2]])
+        return f"Warning, ground obstacle directly ahead: {low_names}{dist_str}. Watch your step."
 
-    # Case A: Entire path is clear
+    # Check Overhead Hazard
+    if has_overhead:
+        top_names = " and ".join([it["class"] for it in zones["top-middle"][:2]])
+        return f"Warning, overhead obstacle directly ahead: {top_names}. Duck or step aside."
+
+    # Eye/Chest Level Obstacles
+    m_name = (" and ".join([it["class"] for it in zones["middle-center"][:2]])) if zones["middle-center"] else ("obstacle" if middle_proximity else None)
+    l_name = (" and ".join([it["class"] for it in zones["middle-left"][:2]])) if zones["middle-left"] else None
+    r_name = (" and ".join([it["class"] for it in zones["middle-right"][:2]])) if zones["middle-right"] else None
+
+    has_left = bool(l_name)
+    has_right = bool(r_name)
+
     if not has_mid and not has_left and not has_right:
         return "Path clear ahead. Continue straight."
-
-    # Case B: Only Left has obstacle
-    if has_left and not has_mid and not has_right:
-        name_str = f": {l_name}" if l_name else ""
-        return f"Obstacle on the left{name_str}. Go right."
-
-    # Case C: Only Right has obstacle
-    if has_right and not has_mid and not has_left:
-        name_str = f": {r_name}" if r_name else ""
-        return f"Obstacle on the right{name_str}. Go left."
-
-    # Case D: Only Middle has obstacle (Sides are clear)
-    if has_mid and not has_left and not has_right:
-        name_str = f": {m_name}" if m_name else ""
-        return f"Obstacle directly ahead{name_str}{dist_str}. Go right or go left."
-
-    # Case E: Middle + Left blocked (Right is CLEAR)
-    if has_mid and has_left and not has_right:
-        name_str = f": {m_name}" if m_name else ""
-        return f"Obstacle ahead and on the left{name_str}. Go right."
-
-    # Case F: Middle + Right blocked (Left is CLEAR)
-    if has_mid and has_right and not has_left:
-        name_str = f": {m_name}" if m_name else ""
-        return f"Obstacle ahead and on the right{name_str}. Go left."
-
-    # Case G: Left + Right blocked, Middle is CLEAR
-    if not has_mid and has_left and has_right:
-        return f"Obstacles on left and right. Go straight, direct path is clear."
-
-    # Case H: All three sectors blocked
-    return f"Obstacles ahead, left, and right. Path blocked, please stop."
+    elif has_left and not has_mid and not has_right:
+        return f"Obstacle on your left: {l_name}. Path ahead is clear, go straight."
+    elif has_right and not has_mid and not has_left:
+        return f"Obstacle on your right: {r_name}. Path ahead is clear, go straight."
+    elif has_mid and not has_left and not has_right:
+        return f"Obstacle directly ahead: {m_name}{dist_str}. Go right or go left."
+    elif has_mid and has_left and not has_right:
+        return f"Obstacle ahead and on the left: {m_name}{dist_str}. Go right, path is clear on the right."
+    elif has_mid and has_right and not has_left:
+        return f"Obstacle ahead and on the right: {m_name}{dist_str}. Go left, path is clear on the left."
+    elif not has_mid and has_left and has_right:
+        return f"Obstacles on left ({l_name}) and right ({r_name}). Center path is clear, go straight."
+    else:
+        return f"Obstacles detected ahead ({m_name}), left, and right. Path blocked, please stop."
 
 
 if __name__ == "__main__":

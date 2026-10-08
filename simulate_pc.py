@@ -306,15 +306,33 @@ def main():
                 break
             elif key == ord(' '):  # SPACEBAR = Push Button (All Sectors)
                 manual_trigger = True
-            elif key in [ord('l'), ord('L')]:  # Query Left Sector
+            elif key in [ord('l'), ord('L'), ord('4')]:  # Query Mid-Left
                 manual_trigger = True
-                target_sector = "left"
-            elif key in [ord('m'), ord('M')]:  # Query Middle Sector
+                target_sector = "middle-left"
+            elif key in [ord('m'), ord('M'), ord('5')]:  # Query Directly Ahead
                 manual_trigger = True
-                target_sector = "middle"
-            elif key in [ord('r'), ord('R')]:  # Query Right Sector
+                target_sector = "middle-center"
+            elif key in [ord('r'), ord('R'), ord('6')]:  # Query Mid-Right
                 manual_trigger = True
-                target_sector = "right"
+                target_sector = "middle-right"
+            elif key == ord('7'):  # Query Top-Left
+                manual_trigger = True
+                target_sector = "top-left"
+            elif key == ord('8'):  # Query Top-Ahead (Overhead)
+                manual_trigger = True
+                target_sector = "top-middle"
+            elif key == ord('9'):  # Query Top-Right
+                manual_trigger = True
+                target_sector = "top-right"
+            elif key == ord('1'):  # Query Low-Left
+                manual_trigger = True
+                target_sector = "bottom-left"
+            elif key == ord('2'):  # Query Low-Ahead (Trip Hazard)
+                manual_trigger = True
+                target_sector = "bottom-middle"
+            elif key == ord('3'):  # Query Low-Right
+                manual_trigger = True
+                target_sector = "bottom-right"
             elif key in [ord('w'), ord('W'), 82]:  # W or UP arrow
                 distance_meters = max(0.2, distance_meters - 0.15)
             elif key in [ord('s'), ord('S'), 84]:  # S or DOWN arrow
@@ -335,19 +353,19 @@ def main():
                 detections = detector.detect(frame)
             if virtual_cam and len(detections) == 0:
                 sim_center_x = ox + ow // 2
-                if sim_center_x < 224:
-                    sim_zone = "left"
-                elif sim_center_x > 416:
-                    sim_zone = "right"
-                else:
-                    sim_zone = "middle"
+                sim_center_y = oy + oh // 2
+
+                # 9-zone classification for simulated frame
+                col = "left" if sim_center_x < 213 else ("right" if sim_center_x > 426 else "middle")
+                row = "top" if sim_center_y < 160 else ("bottom" if sim_center_y > 320 else "middle")
+                sim_zone = f"{row}-{col}" if (row != "middle" or col != "middle") else "middle-center"
 
                 detections = [{
                     "class": "person",
                     "confidence": 0.92,
                     "box": [ox, oy, ox + ow, oy + oh],
                     "zone": sim_zone,
-                    "center": (sim_center_x, oy + oh // 2)
+                    "center": (sim_center_x, sim_center_y)
                 }]
 
             # ---------------------------------------------
@@ -394,30 +412,31 @@ def main():
             x_left = int(w * 0.35)
             x_right = int(w * 0.65)
 
-            # 1. Spatial Zone Dividers (Left | Middle | Right)
-            cv2.line(frame, (x_left, 85), (x_left, h - 45), (70, 80, 95), 1, cv2.LINE_AA)
-            cv2.line(frame, (x_right, 85), (x_right, h - 45), (70, 80, 95), 1, cv2.LINE_AA)
+            # 1. 9-Part Spatial Grid Matrix (Top 3, Middle 3, Bottom 3)
+            col1_x = int(w / 3.0)
+            col2_x = int((2.0 * w) / 3.0)
+            row1_y = int(85 + (h - 130) / 3.0)
+            row2_y = int(85 + (2.0 * (h - 130)) / 3.0)
 
-            # Detect count per zone
-            left_count = sum(1 for d in detections if d.get("zone") == "left")
-            mid_count = sum(1 for d in detections if d.get("zone") == "middle")
-            right_count = sum(1 for d in detections if d.get("zone") == "right")
+            # Grid lines (2 vertical, 2 horizontal)
+            grid_color = (60, 75, 95)
+            cv2.line(frame, (col1_x, 85), (col1_x, h - 45), grid_color, 1, cv2.LINE_AA)
+            cv2.line(frame, (col2_x, 85), (col2_x, h - 45), grid_color, 1, cv2.LINE_AA)
+            cv2.line(frame, (0, row1_y), (w, row1_y), grid_color, 1, cv2.LINE_AA)
+            cv2.line(frame, (0, row2_y), (w, row2_y), grid_color, 1, cv2.LINE_AA)
 
-            # Zone Header Badges
-            # Left Header
-            l_color = (56, 189, 248) if left_count > 0 else (120, 130, 140)
-            cv2.putText(frame, f"[ LEFT: {left_count} ]", (20, 105),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, l_color, 1, cv2.LINE_AA)
+            # 9 Grid Sector Labels
+            cv2.putText(frame, "TOP-L [7]", (15, 102), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (140, 150, 165), 1, cv2.LINE_AA)
+            cv2.putText(frame, "TOP-AHEAD (OVERHEAD) [8]", (col1_x + 10, 102), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (0, 200, 255), 1, cv2.LINE_AA)
+            cv2.putText(frame, "TOP-R [9]", (col2_x + 10, 102), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (140, 150, 165), 1, cv2.LINE_AA)
 
-            # Middle Header
-            m_color = (0, 0, 255) if (mid_count > 0 and distance_meters < 1.0) else ((0, 220, 255) if mid_count > 0 else (120, 130, 140))
-            cv2.putText(frame, f"[ MIDDLE: {mid_count} ]", (x_left + 15, 105),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, m_color, 1, cv2.LINE_AA)
+            cv2.putText(frame, "MID-LEFT [4/L]", (15, row1_y + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (56, 189, 248), 1, cv2.LINE_AA)
+            cv2.putText(frame, "DIRECTLY AHEAD [5/M]", (col1_x + 10, row1_y + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (0, 80, 255) if distance_meters < 1.0 else (0, 220, 100), 1, cv2.LINE_AA)
+            cv2.putText(frame, "MID-RIGHT [6/R]", (col2_x + 10, row1_y + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (56, 189, 248), 1, cv2.LINE_AA)
 
-            # Right Header
-            r_color = (56, 189, 248) if right_count > 0 else (120, 130, 140)
-            cv2.putText(frame, f"[ RIGHT: {right_count} ]", (x_right + 15, 105),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, r_color, 1, cv2.LINE_AA)
+            cv2.putText(frame, "LOW-LEFT [1]", (15, row2_y + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (140, 150, 165), 1, cv2.LINE_AA)
+            cv2.putText(frame, "LOW-AHEAD (TRIP HAZARD) [2]", (col1_x + 10, row2_y + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (0, 140, 255), 1, cv2.LINE_AA)
+            cv2.putText(frame, "LOW-RIGHT [3]", (col2_x + 10, row2_y + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (140, 150, 165), 1, cv2.LINE_AA)
 
             # 2. Bounding Boxes
             for det in detections:
@@ -449,7 +468,7 @@ def main():
             walk_mode_str = "AUTO-WALK [ON]" if auto_walk else "MANUAL [W/S]"
             cv2.putText(frame, f"FPS: {fps:.1f} | Mode: {walk_mode_str} | [SPACE]: Full Scan",
                         (15, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
-            cv2.putText(frame, "Hotkeys: [L] Left | [M] Middle | [R] Right | [W/S] Dist | [A] Auto | [Q] Quit",
+            cv2.putText(frame, "Hotkeys: [7,8,9] Top 3 | [4,5,6/L,M,R] Mid 3 | [1,2,3] Low 3 | [SPACE] Scan | [W/S] Dist",
                         (15, 68), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (160, 175, 190), 1)
 
             # Radar Distance Indicator Bar

@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Smart Vision Assistant — Prototype Simulation Suite</title>
+  <meta name="description" content="Interactive Simulation Environment, Hardware Prototype Showcase, and Circuit Diagnostics for the Smart Vision Assistant." />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #090d16;
+      --card-bg: rgba(17, 24, 39, 0.7);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --accent: #38bdf8;
+      --accent-glow: rgba(56, 189, 248, 0.25);
+      --accent-green: #10b981;
+      --accent-purple: #a855f7;
+      --text: #f3f4f6;
+      --text-muted: #9ca3af;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      text-rendering: optimizeLegibility;
+      background-color: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      background-image:
+        radial-gradient(circle at 10% 20%, rgba(56, 189, 248, 0.1) 0%, transparent 40%),
+        radial-gradient(circle at 90% 80%, rgba(16, 185, 129, 0.08) 0%, transparent 40%);
+    }
+    header {
+      padding: 2.5rem 2rem 1.5rem;
+      text-align: center;
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.35rem 1rem;
+      background: rgba(56, 189, 248, 0.12);
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      border-radius: 9999px;
+      color: var(--accent);
+      font-size: 0.85rem;
+      font-weight: 600;
+      margin-bottom: 1.25rem;
+      letter-spacing: 0.03em;
+    }
+    .badge .pulse {
+      width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
+      box-shadow: 0 0 10px var(--accent);
+      animation: pulseAnim 2s infinite;
+    }
+    @keyframes pulseAnim {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(1.3); }
+    }
+    h1 {
+      font-size: clamp(2rem, 4vw, 3rem);
+      font-weight: 800;
+      line-height: 1.15;
+      letter-spacing: -0.02em;
+      color: #ffffff !important;
+      margin-bottom: 1rem;
+      text-shadow: 0 2px 14px rgba(0, 0, 0, 0.7);
+    }
+    h1 .highlight {
+      color: #38bdf8 !important;
+    }
+    p.subtitle {
+      font-size: 1.1rem;
+      color: #cbd5e1;
+      line-height: 1.6;
+    }
+    main {
+      flex: 1;
+      max-width: 1200px;
+      width: 100%;
+      margin: 1rem auto 3rem;
+      padding: 0 1.5rem;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 1.5rem;
+      margin-top: 2rem;
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 1.25rem;
+      padding: 2rem;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      backdrop-filter: blur(12px);
+      position: relative;
+      overflow: hidden;
+    }
+    .card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0; height: 3px;
+      background: linear-gradient(90deg, transparent, var(--card-accent, var(--accent)), transparent);
+      opacity: 0;
+      transition: opacity 0.3s ease;
+    }
+    .card:hover {
+      transform: translateY(-4px);
+      border-color: rgba(255, 255, 255, 0.18);
+      box-shadow: 0 16px 36px rgba(0, 0, 0, 0.4);
+    }
+    .card:hover::before {
+      opacity: 1;
+    }
+    .card-icon {
+      width: 3.5rem;
+      height: 3.5rem;
+      border-radius: 1rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.8rem;
+      margin-bottom: 1.5rem;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .card h2 {
+      font-size: 1.35rem;
+      font-weight: 700;
+      margin-bottom: 0.75rem;
+      color: #ffffff !important;
+    }
+    .card p {
+      font-size: 0.95rem;
+      color: #cbd5e1;
+      line-height: 1.55;
+      margin-bottom: 1.75rem;
+      flex: 1;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.6rem;
+      padding: 0.85rem 1.4rem;
+      border-radius: 0.75rem;
+      font-weight: 600;
+      font-size: 0.95rem;
+      text-decoration: none;
+      transition: all 0.2s ease;
+      cursor: pointer;
+    }
+    .btn-primary {
+      background: var(--accent);
+      color: #090d16;
+    }
+    .btn-primary:hover {
+      background: #7dd3fc;
+      box-shadow: 0 0 20px var(--accent-glow);
+    }
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+    }
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.12);
+    }
+    .tag-row {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 1.25rem;
+      flex-wrap: wrap;
+    }
+    .tag {
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 0.2rem 0.6rem;
+      border-radius: 0.35rem;
+      background: rgba(255, 255, 255, 0.06);
+      color: #7dd3fc !important;
+      background: rgba(56, 189, 248, 0.12) !important;
+      border: 1px solid rgba(56, 189, 248, 0.25) !important;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    footer {
+      border-top: 1px solid var(--card-border);
+      padding: 2rem;
+      text-align: center;
+      font-size: 0.9rem;
+      color: #cbd5e1;
+    }
+    footer a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    footer a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="badge">
+      <div class="pulse"></div>
+      Edge AI Hardware Simulation Suite
+    </div>
+    <h1>Smart Vision Assistant <span class="highlight">Prototype Simulation</span></h1>
+    <p class="subtitle">
+      Explore the complete interactive simulation ecosystem, exploded 3D prototype models, circuit diagrams, and spatial audio navigation engine—no physical hardware required.
+    </p>
+  </header>
+
+  <main>
+    <div class="grid">
+
+      <!-- Card 1: Interactive Web Simulator -->
+      <div class="card" style="--card-accent: #38bdf8;">
+        <div>
+          <div class="card-icon" style="background: rgba(56, 189, 248, 0.1); border-color: rgba(56, 189, 248, 0.2);">
+            🎮
+          </div>
+          <div class="tag-row">
+            <span class="tag">Browser Native</span>
+            <span class="tag">Web Speech API</span>
+            <span class="tag">Ultrasonic Radar</span>
+          </div>
+          <h2>Interactive Web Hardware Simulator</h2>
+          <p>
+            Experience real-time obstacle detection directly in your browser. Features live webcam input or synthetic indoor test scene, interactive ultrasonic distance slider, spatial sound cues, haptic vibration, and real-time telemetry.
+          </p>
+        </div>
+        <a href="simulation.html" class="btn btn-primary">
+          Launch Web Simulator →
+        </a>
+      </div>
+
+      <!-- Card 2: Prototype Showcase & Engineering Poster -->
+      <div class="card" style="--card-accent: #10b981;">
+        <div>
+          <div class="card-icon" style="background: rgba(16, 185, 129, 0.1); border-color: rgba(16, 185, 129, 0.2);">
+            🏛️
+          </div>
+          <div class="tag-row">
+            <span class="tag">3D Device Mockup</span>
+            <span class="tag">Circuit Schematics</span>
+            <span class="tag">Printable Poster</span>
+          </div>
+          <h2>Prototype Showcase & Circuit Poster</h2>
+          <p>
+            Comprehensive technical presentation board showcasing the physical wearable device, component callouts, Raspberry Pi 5 pinout wiring, $115 bill of materials, and one-click printable engineering poster mode.
+          </p>
+        </div>
+        <a href="prototype_showcase.html" class="btn btn-secondary">
+          Open Prototype Showcase →
+        </a>
+      </div>
+
+      <!-- Card 3: PC Python Simulator -->
+      <div class="card" style="--card-accent: #a855f7;">
+        <div>
+          <div class="card-icon" style="background: rgba(168, 85, 247, 0.1); border-color: rgba(168, 85, 247, 0.2);">
+            💻
+          </div>
+          <div class="tag-row">
+            <span class="tag">Python 3.10+</span>
+            <span class="tag">OpenCV DNN</span>
+            <span class="tag">YOLOv8 92-Class</span>
+          </div>
+          <h2>Desktop PC Python Simulator</h2>
+          <p>
+            Native desktop simulation running CPU-optimized YOLOv8 inference, spatial zone classification (Left, Center, Right), non-blocking system TTS, and automated radar walking mode.
+          </p>
+        </div>
+        <a href="README.md#2-desktop-pc-simulation-python--opencv" class="btn btn-secondary">
+          View Setup & Controls →
+        </a>
+      </div>
+
+      <!-- Card 4: NPU vs CPU Benchmark Video -->
+      <div class="card" style="--card-accent: #f59e0b;">
+        <div>
+          <div class="card-icon" style="background: rgba(245, 158, 11, 0.1); border-color: rgba(245, 158, 11, 0.2);">
+            🎬
+          </div>
+          <div class="tag-row">
+            <span class="tag">Video Demo</span>
+            <span class="tag">Performance Benchmark</span>
+            <span class="tag">ARM NEON SIMD</span>
+          </div>
+          <h2>NPU vs CPU Benchmark Video</h2>
+          <p>
+            Side-by-side animated demonstration verifying how the 4-core Cortex-A76 CPU achieves ~19.8 FPS with zero NPU hardware, reducing system bill of materials from $250+ to ~$115.
+          </p>
+        </div>
+        <a href="NPU_vs_CPU_Video_Simulation.mp4" target="_blank" class="btn btn-secondary">
+          Watch Benchmark Video →
+        </a>
+      </div>
+
+      <!-- Card 5: Engineering Docs & Wiring Guide -->
+      <div class="card" style="--card-accent: #ec4899;">
+        <div>
+          <div class="card-icon" style="background: rgba(236, 72, 153, 0.1); border-color: rgba(236, 72, 153, 0.2);">
+            📐
+          </div>
+          <div class="tag-row">
+            <span class="tag">Technical Guides</span>
+            <span class="tag">Architecture Rationale</span>
+            <span class="tag">PDF Guides</span>
+          </div>
+          <h2>Hardware Guides & Specifications</h2>
+          <p>
+            Access the complete engineering documentation including the Raspberry Pi 5 Hardware Architecture & Wiring Guide and Architectural Decisions & Rationale reports.
+          </p>
+        </div>
+        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+          <a href="Hardware_Architecture_and_Wiring_Guide.pdf" target="_blank" class="btn btn-secondary" style="flex:1;">
+            Wiring Guide (PDF)
+          </a>
+          <a href="Architecture_Decisions_and_Rationale.pdf" target="_blank" class="btn btn-secondary" style="flex:1;">
+            Rationale (PDF)
+          </a>
+        </div>
+      </div>
+
+      <!-- Card 6: Parent Project Core Repository -->
+      <div class="card" style="--card-accent: #3b82f6;">
+        <div>
+          <div class="card-icon" style="background: rgba(59, 130, 246, 0.1); border-color: rgba(59, 130, 246, 0.2);">
+            🔗
+          </div>
+          <div class="tag-row">
+            <span class="tag">GitHub</span>
+            <span class="tag">Core Firmware</span>
+            <span class="tag">Full Pipeline</span>
+          </div>
+          <h2>Parent Project: ai-object-detection</h2>
+          <p>
+            Explore the main production repository featuring edge firmware for Raspberry Pi 5, offline standalone Windows/Linux executables, model training code, and benchmark suites.
+          </p>
+        </div>
+        <a href="https://github.com/rootnode-rebels/ai-object-detection" target="_blank" class="btn btn-secondary">
+          Visit Main Repository →
+        </a>
+      </div>
+
+    </div>
+  </main>
+
+  <footer>
+    <p>
+      Smart Vision Assistant — Assistive Edge AI Navigation Device • Built by <a href="https://github.com/rootnode-rebels" target="_blank">RootNode Rebels</a> • Released under the MIT License
+    </p>
+  </footer>
+
+</body>
+</html>
