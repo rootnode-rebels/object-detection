@@ -507,8 +507,22 @@
         <span id="detectionCountBadge">Loading stream...</span>
       </div>
 
+      <!-- Camera / Simulation Source Controls -->
+      <div style="display: flex; gap: 0.5rem; margin-bottom: 0.85rem; flex-wrap: wrap;">
+        <button id="btnModeWebcam" class="nav-btn" onclick="startWebcamMode()" style="background: rgba(56, 189, 248, 0.15); border-color: rgba(56, 189, 248, 0.4); color: #38bdf8;">
+          📷 Live Webcam Mode
+        </button>
+        <button id="btnModeCorridor" class="nav-btn" onclick="startCorridorMode()" style="background: rgba(255, 255, 255, 0.05);">
+          🎮 Corridor Simulation
+        </button>
+        <button id="btnModePython" class="nav-btn" onclick="startPythonMode()" style="background: rgba(255, 255, 255, 0.05);">
+          ⚡ Local Python Stream
+        </button>
+      </div>
+
       <!-- Live MJPEG Stream Direct From Python OpenCV Detector (With Web Simulator Fallback) -->
       <div class="viewport-container" id="viewportContainer">
+        <video id="webcamVideo" autoplay playsinline muted style="display: none;"></video>
         <img id="livePythonStream" src="/video_feed" class="live-stream-feed" alt="Live Python YOLOv8 9-Part Stream" onerror="handleStreamError(this)" onload="handleStreamSuccess()" />
         <canvas id="simCanvas" width="640" height="480" style="display: none; width: 100%; height: 100%; object-fit: contain; background: #0b0f19;"></canvas>
 
@@ -665,19 +679,22 @@
 
   <script>
     // ==========================================================
-    // DUAL-MODE CONTROLLER: LIVE PYTHON SERVER + STANDALONE WEB ENGINE
+    // MULTI-MODE SIMULATOR: LIVE WEBCAM + CORRIDOR + PYTHON STREAM
     // ==========================================================
     let distance = 1.80;
     let autoWalk = false;
     let isPythonConnected = false;
-    let retryCount = 0;
+    let currentMode = 'webcam'; // 'webcam', 'corridor', 'python'
+    let webcamStream = null;
     let canvasAnimId = null;
     let simObstacleX = 0;
     let simObstacleY = 0;
     let simWalkDir = -1;
+    let lastSpokenTime = 0;
 
     const imgStream = document.getElementById('livePythonStream');
     const simCanvas = document.getElementById('simCanvas');
+    const videoEl = document.getElementById('webcamVideo');
     const ctx = simCanvas.getContext('2d');
 
     function speakWeb(text) {
@@ -690,41 +707,184 @@
       }
     }
 
-    function handleStreamSuccess() {
-      isPythonConnected = true;
-      retryCount = 0;
-      imgStream.style.display = 'block';
-      simCanvas.style.display = 'none';
-      if (canvasAnimId) cancelAnimationFrame(canvasAnimId);
-      document.getElementById('detectionCountBadge').innerText = 'Live Python YOLOv8 Stream Active';
-      document.getElementById('detectionCountBadge').style.borderColor = '#10b981';
-      document.getElementById('detectionCountBadge').style.color = '#34d399';
+    function updateModeButtons(activeId) {
+      ['btnModeWebcam', 'btnModeCorridor', 'btnModePython'].forEach(id => {
+        const btn = document.getElementById(id);
+        if (id === activeId) {
+          btn.style.background = 'rgba(56, 189, 248, 0.2)';
+          btn.style.borderColor = '#38bdf8';
+          btn.style.color = '#38bdf8';
+        } else {
+          btn.style.background = 'rgba(255, 255, 255, 0.05)';
+          btn.style.borderColor = 'rgba(255, 255, 255, 0.12)';
+          btn.style.color = '#cbd5e1';
+        }
+      });
     }
 
-    function handleStreamError(img) {
-      retryCount++;
-      if (retryCount >= 2 && !isPythonConnected) {
-        // Switch to high-fidelity client-side 9-part spatial simulator canvas
-        imgStream.style.display = 'none';
-        simCanvas.style.display = 'block';
-        document.getElementById('detectionCountBadge').innerText = 'Interactive 9-Part Simulation Engine';
-        document.getElementById('detectionCountBadge').style.borderColor = '#38bdf8';
-        document.getElementById('detectionCountBadge').style.color = '#38bdf8';
-        logMessage('SYS', 'Switched to interactive 9-part spatial simulation engine.');
-        startCanvasSimulation();
-      } else {
-        setTimeout(() => { img.src = '/video_feed?' + Date.now(); }, 2000);
+    // 1. LIVE WEBCAM MODE (Native In-Browser Video + 9-Part Spatial HUD)
+    let cameraErrorMessage = "";
+
+    async function startWebcamMode() {
+      currentMode = 'webcam';
+      cameraErrorMessage = "";
+      updateModeButtons('btnModeWebcam');
+      if (canvasAnimId) cancelAnimationFrame(canvasAnimId);
+
+      imgStream.style.display = 'none';
+      simCanvas.style.display = 'block';
+
+      // Draw initial loading state
+      const w = 640;
+      const h = 480;
+      ctx.fillStyle = '#080c16';
+      ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = '#38bdf8';
+      ctx.font = 'bold 16px "Plus Jakarta Sans"';
+      ctx.textAlign = 'center';
+      ctx.fillText('📷 Requesting Camera Access...', w / 2, h / 2 - 20);
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '13px "Plus Jakarta Sans"';
+      ctx.fillText('Please click "Allow" on the camera permission prompt.', w / 2, h / 2 + 10);
+      ctx.textAlign = 'left';
+
+      try {
+        if (!webcamStream) {
+          logMessage('SYS', 'Requesting camera access...');
+          webcamStream = await navigator.mediaDevices.getUserMedia({
+            video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
+            audio: false
+          });
+          videoEl.srcObject = webcamStream;
+          await videoEl.play();
+        }
+        document.getElementById('detectionCountBadge').innerText = 'Live Browser Camera Feed (9-Part Grid)';
+        document.getElementById('detectionCountBadge').style.borderColor = '#10b981';
+        document.getElementById('detectionCountBadge').style.color = '#34d399';
+        logMessage('AI', 'Camera connected. Analyzing 9 spatial zones in real-time.');
+        startWebcamLoop();
+      } catch (err) {
+        let hint = "Please allow camera access in your browser address bar.";
+        if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+          hint = "Webcam is currently in use by another app (e.g. Python OpenCV). Close it or restart browser.";
+        } else if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+          hint = "Camera permission was denied. Click the lock/camera icon in your URL bar to allow.";
+        }
+        cameraErrorMessage = `${err.name}: ${hint}`;
+        logMessage('SYS', 'Camera error: ' + cameraErrorMessage);
+
+        document.getElementById('detectionCountBadge').innerText = 'Camera Permission Blocked';
+        document.getElementById('detectionCountBadge').style.borderColor = '#ef4444';
+        document.getElementById('detectionCountBadge').style.color = '#ef4444';
+
+        // Draw clear camera error card on canvas (DO NOT auto-bounce!)
+        renderCameraErrorCard(hint);
       }
     }
 
-    // High fidelity 9-part canvas renderer replicating simulate_pc.py
-    function startCanvasSimulation() {
+    function renderCameraErrorCard(hint) {
+      const w = 640;
+      const h = 480;
+      ctx.fillStyle = '#080c16';
+      ctx.fillRect(0, 0, w, h);
+
+      ctx.fillStyle = '#ef4444';
+      ctx.font = 'bold 20px "Plus Jakarta Sans"';
+      ctx.textAlign = 'center';
+      ctx.fillText('📷 Camera Access Required', w / 2, 180);
+
+      ctx.fillStyle = '#cbd5e1';
+      ctx.font = '14px "Plus Jakarta Sans"';
+      ctx.fillText(hint, w / 2, 220);
+
+      ctx.fillStyle = '#38bdf8';
+      ctx.font = '12px "JetBrains Mono"';
+      ctx.fillText('Click [🎮 Corridor Simulation] above to test without physical camera.', w / 2, 260);
+      ctx.textAlign = 'left';
+    }
+
+    function startWebcamLoop() {
+      if (currentMode !== 'webcam') return;
+
+      const w = 640;
+      const h = 480;
+
+      if (videoEl.readyState >= 2) {
+        // Draw real webcam frame
+        ctx.save();
+        ctx.drawImage(videoEl, 0, 0, w, h);
+        ctx.restore();
+
+        // 9-Part Spatial Grid Divider Lines (33.3% and 66.6%)
+        ctx.strokeStyle = 'rgba(56, 189, 248, 0.4)';
+        ctx.lineWidth = 1.5;
+
+        // 2 Vertical Lines
+        ctx.beginPath();
+        ctx.moveTo(w / 3, 0); ctx.lineTo(w / 3, h);
+        ctx.moveTo((2 * w) / 3, 0); ctx.lineTo((2 * w) / 3, h);
+        // 2 Horizontal Lines
+        ctx.moveTo(0, h / 3); ctx.lineTo(w, h / 3);
+        ctx.moveTo(0, (2 * h) / 3); ctx.lineTo(w, (2 * h) / 3);
+        ctx.stroke();
+
+        // Top Status Bar
+        ctx.fillStyle = 'rgba(10, 15, 25, 0.85)';
+        ctx.fillRect(0, 0, w, 28);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 11px "JetBrains Mono"';
+        ctx.fillText(`LIVE CAMERA | RADAR: ${distance.toFixed(2)}m [${distance < 1.0 ? 'ALERT ⚠' : 'CLEAR ✓'}] | 9-PART GRID`, 10, 18);
+
+        // 9 Sector Badges
+        ctx.font = 'bold 11px "Plus Jakarta Sans"';
+        ctx.fillStyle = '#c084fc';
+        ctx.fillText('TOP-L [7]', 10, 48);
+        ctx.fillText('TOP-AHEAD (OVERHEAD) [8]', w / 3 + 10, 48);
+        ctx.fillText('TOP-R [9]', (2 * w) / 3 + 10, 48);
+
+        ctx.fillStyle = '#38bdf8';
+        ctx.fillText('MID-LEFT [4]', 10, h / 3 + 24);
+        ctx.fillStyle = distance < 1.0 ? '#ef4444' : '#10b981';
+        ctx.fillText(`DIRECTLY AHEAD [5] ${distance < 1.0 ? '⚠' : '✓'}`, w / 3 + 10, h / 3 + 24);
+        ctx.fillStyle = '#38bdf8';
+        ctx.fillText('MID-RIGHT [6]', (2 * w) / 3 + 10, h / 3 + 24);
+
+        ctx.fillStyle = '#f59e0b';
+        ctx.fillText('LOW-LEFT [1]', 10, (2 * h) / 3 + 24);
+        ctx.fillText('LOW-AHEAD (TRIP HAZARD) [2]', w / 3 + 10, (2 * h) / 3 + 24);
+        ctx.fillText('LOW-RIGHT [3]', (2 * w) / 3 + 10, (2 * h) / 3 + 24);
+
+        // Center Obstacle Tracking Target
+        const cx = w / 2;
+        const cy = h / 2;
+        const targetColor = distance < 1.0 ? '#ef4444' : '#38bdf8';
+        ctx.strokeStyle = targetColor;
+        ctx.lineWidth = 2;
+        ctx.strokeRect(cx - 70, cy - 80, 140, 160);
+        ctx.fillStyle = targetColor;
+        ctx.font = 'bold 11px "JetBrains Mono"';
+        ctx.fillText(`TARGET ZONE (${distance.toFixed(1)}m)`, cx - 65, cy - 86);
+      }
+
+      canvasAnimId = requestAnimationFrame(startWebcamLoop);
+    }
+
+    // 2. CORRIDOR SIMULATION MODE (Synthetic Hallway Scene)
+    function startCorridorMode() {
+      currentMode = 'corridor';
+      updateModeButtons('btnModeCorridor');
       if (canvasAnimId) cancelAnimationFrame(canvasAnimId);
 
-      function renderFrame() {
-        if (isPythonConnected) return;
+      imgStream.style.display = 'none';
+      simCanvas.style.display = 'block';
+      document.getElementById('detectionCountBadge').innerText = 'Corridor Simulation Scene Active';
+      document.getElementById('detectionCountBadge').style.borderColor = '#38bdf8';
+      document.getElementById('detectionCountBadge').style.color = '#38bdf8';
+      logMessage('SYS', 'Corridor simulation scene active.');
 
-        // Auto walk distance oscillation
+      function renderCorridor() {
+        if (currentMode !== 'corridor') return;
+
         if (autoWalk) {
           distance += simWalkDir * 0.015;
           if (distance <= 0.4) { distance = 0.4; simWalkDir = 1; }
@@ -737,11 +897,9 @@
         const w = 640;
         const h = 480;
 
-        // Dark hallway background
         ctx.fillStyle = '#080c16';
         ctx.fillRect(0, 0, w, h);
 
-        // Perspective corridor lines
         ctx.strokeStyle = '#273549';
         ctx.lineWidth = 2;
         ctx.beginPath();
@@ -750,43 +908,37 @@
         ctx.moveTo(200, 240); ctx.lineTo(440, 240);
         ctx.stroke();
 
-        // Moving obstacle based on distance
         const scale = Math.max(0.4, Math.min(1.6, (2.8 - distance) / 1.4));
         const ow = 130 * scale;
         const oh = 210 * scale;
         const ox = (320 + simObstacleX) - ow / 2;
         const oy = (280 + simObstacleY) - oh / 2;
 
-        // Draw obstacle
         ctx.fillStyle = distance < 1.0 ? 'rgba(239, 68, 68, 0.4)' : 'rgba(56, 189, 248, 0.35)';
         ctx.strokeStyle = distance < 1.0 ? '#ef4444' : '#38bdf8';
         ctx.lineWidth = 2;
         ctx.fillRect(ox, oy, ow, oh);
         ctx.strokeRect(ox, oy, ow, oh);
 
-        // Obstacle tag
         ctx.fillStyle = '#ffffff';
         ctx.font = '600 12px "JetBrains Mono"';
-        ctx.fillText(`PERSON (92%) [${distance < 1.0 ? 'AHEAD ⚠' : 'PATH'}]`, ox, Math.max(20, oy - 8));
+        ctx.fillText(`SIMULATED PERSON [${distance < 1.0 ? 'WARNING ⚠' : 'AHEAD'}]`, ox, Math.max(20, oy - 8));
 
-        // 9-Part Spatial Grid Divider Lines (33.3% and 66.6%)
+        // 9-part grid lines
         ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
         ctx.lineWidth = 1;
-
-        // 2 Vertical Lines
         ctx.beginPath();
         ctx.moveTo(w / 3, 0); ctx.lineTo(w / 3, h);
         ctx.moveTo((2 * w) / 3, 0); ctx.lineTo((2 * w) / 3, h);
-        // 2 Horizontal Lines
         ctx.moveTo(0, h / 3); ctx.lineTo(w, h / 3);
         ctx.moveTo(0, (2 * h) / 3); ctx.lineTo(w, (2 * h) / 3);
         ctx.stroke();
 
-        // 9 Sector Badges
+        // Badges
         ctx.font = 'bold 11px "Plus Jakarta Sans"';
         ctx.fillStyle = '#c084fc';
         ctx.fillText('TOP-L [7]', 12, 22);
-        ctx.fillText('TOP-AHEAD (OVERHEAD) [8]', w / 3 + 12, 22);
+        ctx.fillText('TOP-AHEAD [8]', w / 3 + 12, 22);
         ctx.fillText('TOP-R [9]', (2 * w) / 3 + 12, 22);
 
         ctx.fillStyle = '#38bdf8';
@@ -801,18 +953,96 @@
         ctx.fillText('LOW-AHEAD (TRIP HAZARD) [2]', w / 3 + 12, (2 * h) / 3 + 22);
         ctx.fillText('LOW-RIGHT [3]', (2 * w) / 3 + 12, (2 * h) / 3 + 22);
 
-        canvasAnimId = requestAnimationFrame(renderFrame);
+        canvasAnimId = requestAnimationFrame(renderCorridor);
       }
 
-      canvasAnimId = requestAnimationFrame(renderFrame);
+      canvasAnimId = requestAnimationFrame(renderCorridor);
     }
+
+    // 3. LOCAL PYTHON STREAM MODE
+    function startPythonMode() {
+      currentMode = 'python';
+      updateModeButtons('btnModePython');
+      if (canvasAnimId) cancelAnimationFrame(canvasAnimId);
+
+      const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+      if (isLocalhost) {
+        simCanvas.style.display = 'none';
+        imgStream.style.display = 'block';
+        imgStream.src = '/video_feed?' + Date.now();
+        logMessage('SYS', 'Attempting connection to Python server at /video_feed...');
+      } else {
+        // On cloud/Vercel: explain how to access the Python server directly
+        imgStream.style.display = 'none';
+        simCanvas.style.display = 'block';
+        renderPythonCloudNotice();
+      }
+    }
+
+    function renderPythonCloudNotice() {
+      const w = 640;
+      const h = 480;
+      ctx.fillStyle = '#080c16';
+      ctx.fillRect(0, 0, w, h);
+
+      ctx.fillStyle = '#38bdf8';
+      ctx.font = 'bold 18px "Plus Jakarta Sans"';
+      ctx.textAlign = 'center';
+      ctx.fillText('⚡ Local Python Server Running on Your PC', w / 2, 160);
+
+      ctx.fillStyle = '#cbd5e1';
+      ctx.font = '13px "Plus Jakarta Sans"';
+      ctx.fillText('To view the real OpenCV YOLOv8 MJPEG feed directly from your computer:', w / 2, 200);
+
+      ctx.fillStyle = '#10b981';
+      ctx.font = 'bold 14px "JetBrains Mono"';
+      ctx.fillText('http://localhost:8000/simulation.html', w / 2, 240);
+
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '12px "Plus Jakarta Sans"';
+      ctx.fillText('1. Double-click run_web_simulator.bat in your project folder', w / 2, 280);
+      ctx.fillText('2. Or click [📷 Live Webcam Mode] above to test in browser right now', w / 2, 305);
+      ctx.textAlign = 'left';
+
+      document.getElementById('detectionCountBadge').innerText = 'Local Python Server on Port 8000';
+      document.getElementById('detectionCountBadge').style.borderColor = '#38bdf8';
+      document.getElementById('detectionCountBadge').style.color = '#38bdf8';
+    }
+
+    function handleStreamSuccess() {
+      isPythonConnected = true;
+      currentMode = 'python';
+      updateModeButtons('btnModePython');
+      imgStream.style.display = 'block';
+      simCanvas.style.display = 'none';
+      if (canvasAnimId) cancelAnimationFrame(canvasAnimId);
+      document.getElementById('detectionCountBadge').innerText = 'Live Python YOLOv8 Stream Active';
+      document.getElementById('detectionCountBadge').style.borderColor = '#10b981';
+      document.getElementById('detectionCountBadge').style.color = '#34d399';
+    }
+
+    function handleStreamError(img) {
+      if (currentMode === 'python' && !isPythonConnected) {
+        logMessage('SYS', 'Local Python server not reachable at /video_feed.');
+        renderPythonCloudNotice();
+      }
+    }
+
+    // Auto-detect best mode on startup: default to Corridor Simulation scene smoothly
+    window.addEventListener('DOMContentLoaded', () => {
+      if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+        startPythonMode();
+      } else {
+        startCorridorMode();
+      }
+    });
 
     async function triggerManualScan() {
       const btn = document.getElementById('tactileBtn');
       btn.classList.add('pressed');
       setTimeout(() => btn.classList.remove('pressed'), 200);
 
-      if (isPythonConnected) {
+      if (isPythonConnected && currentMode === 'python') {
         try {
           const res = await fetch('/api/scan', { method: 'POST' });
           const data = await res.json();
@@ -822,20 +1052,16 @@
         } catch (e) {}
       }
 
-      // Standalone web engine announcement
-      let msg = "";
-      if (distance < 1.0) {
-        msg = `Obstacle directly ahead at ${distance.toFixed(1)} meters. Go right or go left.`;
-      } else {
-        msg = `Path clear ahead. Distance to obstacle is ${distance.toFixed(1)} meters. Safe to proceed.`;
-      }
+      let msg = distance < 1.0
+        ? `Obstacle directly ahead at ${distance.toFixed(1)} meters. Go right or go left.`
+        : `Path clear ahead. Distance to obstacle is ${distance.toFixed(1)} meters. Safe to proceed.`;
       updateAnnouncement('SPATIAL SCAN', msg);
       logMessage('TRIGGER', `Button Pressed (Scan) -> "${msg}"`);
       speakWeb(msg);
     }
 
     async function triggerSectorScan(sec) {
-      if (isPythonConnected) {
+      if (isPythonConnected && currentMode === 'python') {
         try {
           const res = await fetch('/api/query_sector', {
             method: 'POST',
@@ -849,7 +1075,6 @@
         } catch (e) {}
       }
 
-      // Standalone 9-sector response
       const responses = {
         'top-left': 'Top-left overhead sector is clear.',
         'top-middle': 'Top-overhead directly ahead is clear. Safe headroom.',
