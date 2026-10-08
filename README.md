@@ -238,8 +238,10 @@ If running from source code:
    * `[A]` : Toggle Auto-walk radar oscillation mode
    * `[Q]` / `[ESC]` : Exit simulation
 
-4. **Interactive Hardware Web Simulator:**
-   Open `simulation.html` in any web browser to interactively test the ultrasonic radar, push button, spatial sector HUD, and voice synthesis in a GUI environment.
+4. **Interactive Hardware Web Simulator & Prototype Showcase:**
+   - **Dedicated Repository:** [rootnode-rebels/ai-object-detection-simulation](https://github.com/rootnode-rebels/ai-object-detection-simulation)
+   - **Live Online Demo:** [https://rootnode-rebels.github.io/ai-object-detection-simulation/](https://rootnode-rebels.github.io/ai-object-detection-simulation/)
+   - Open `simulation.html` or `prototype_showcase.html` locally in any web browser to interactively test the ultrasonic radar, push button, spatial sector HUD, and voice synthesis in a GUI environment.
 
 ---
 
