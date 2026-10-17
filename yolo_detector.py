@@ -11,6 +11,7 @@ import urllib.request
 import hashlib
 import numpy as np
 import cv2
+import gc
 
 # COCO 80 Class Names
 COCO_CLASSES = [
@@ -194,7 +195,7 @@ class ApproachTracker:
                 trk["area"] = area
                 trk["zone"] = det.get("zone", "middle-center")
                 trk["history"].append((now, area, center, box))
-                if len(trk["history"]) > 25:
+                if len(trk["history"]) > 15:
                     trk["history"].pop(0)
 
                 # Evaluate growth over time window (0.2s - 1.2s ago)
@@ -308,12 +309,30 @@ class YOLODetector:
         else:
             self.classes = COCO_CLASSES
 
+        # Check system available memory before loading ONNX model on 2GB Pi
+        try:
+            with open("/proc/meminfo", "r") as f:
+                for line in f:
+                    if "MemAvailable" in line:
+                        avail_mb = int(line.split()[1]) / 1024.0
+                        if avail_mb < 250:
+                            print(f"[WARN] Low system memory ({avail_mb:.1f} MB available). Consider using yolov8n.onnx for lowest RAM footprint.")
+                        break
+        except Exception:
+            pass
+
         print(f"[INFO] Loading YOLOv8 ONNX model on CPU: {chosen_model}...")
         try:
             self.net = cv2.dnn.readNetFromONNX(chosen_model)
-            # Optimize for CPU execution on Raspberry Pi (ARM NEON)
+            # Optimize for 4-core Cortex-A76 CPU execution on Raspberry Pi 5 (ARM NEON)
+            try:
+                cv2.setNumThreads(4)
+            except Exception:
+                pass
             self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
             self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+            # Garbage collect intermediate ONNX parser allocations for 2GB RAM
+            gc.collect()
             print(f"[INFO] YOLOv8 CPU detector ready with {len(self.classes)} classes. Input resolution: {self.input_size[0]}x{self.input_size[1]}")
         except Exception as e:
             print(f"[ERROR] Failed to load ONNX model {chosen_model}: {e}")
@@ -349,6 +368,18 @@ class YOLODetector:
 
         # Output shape is [1, num_attrs, num_anchors] -> Transpose to [num_anchors, num_attrs]
         predictions = np.transpose(outputs[0], (1, 0))
+
+        # Ensure class list length matches model output channels exactly
+        num_model_classes = predictions.shape[1] - 4
+        if not getattr(self, '_classes_validated', False):
+            if num_model_classes == 80 and len(self.classes) != 80:
+                print(f"[INFO] Aligning detector with 80 COCO classes for loaded model.")
+                self.classes = COCO_CLASSES
+            elif num_model_classes == 92 and len(self.classes) != 92 and os.path.exists(CLASSES_TXT_PATH):
+                print(f"[INFO] Aligning detector with 92 custom classes from {CLASSES_TXT_PATH}.")
+                with open(CLASSES_TXT_PATH, "r") as f:
+                    self.classes = [line.strip() for line in f if line.strip()]
+            self._classes_validated = True
 
         boxes = []
         confidences = []
@@ -459,8 +490,11 @@ class YOLODetector:
         return detections
 
     def close(self):
-        """Release resources."""
+        """Release resources and force garbage collection for 2GB RAM."""
         self.net = None
+        if hasattr(self, 'tracker') and hasattr(self.tracker, 'tracks'):
+            self.tracker.tracks.clear()
+        gc.collect()
 
 
 def format_spatial_announcement(detections, distance_meters=None, target_zone=None, is_full_scan=False):

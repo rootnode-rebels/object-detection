@@ -1,0 +1,20 @@
+[Unit]
+Description=Smart Vision Assistant for Visually Impaired (Pi 5 2GB)
+After=multi-user.target sound.target network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/pi5_2gb_assistant
+ExecStart=/usr/bin/python3 /home/pi/pi5_2gb_assistant/smart_assistant.py --headless --resolution 320
+Restart=always
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+Environment=MALLOC_ARENA_MAX=2
+MemoryMax=1.6G
+MemoryHigh=1.4G
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

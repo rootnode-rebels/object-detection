@@ -14,6 +14,7 @@ import sys
 import subprocess
 import threading
 import argparse
+import gc
 
 # Ensure current directory is in sys.path
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -50,18 +51,32 @@ PIN_BUTTON = 17
 sensor = None
 button = None
 
-print("[INFO] Initializing Hardware Sensors...")
-if GPIO_AVAILABLE:
+def init_sensors(trigger_pin=23, echo_pin=24, button_pin=17):
+    """Initializes hardware GPIO sensors (HC-SR04 ultrasonic distance sensor & tactile button)."""
+    global sensor, button, PIN_TRIGGER, PIN_ECHO, PIN_BUTTON
+    PIN_TRIGGER = trigger_pin
+    PIN_ECHO = echo_pin
+    PIN_BUTTON = button_pin
+
+    if not GPIO_AVAILABLE:
+        print("[INFO] GPIO unavailable. Running in desktop/simulation mode.")
+        return
+
+    if sensor is not None:
+        try: sensor.close()
+        except Exception: pass
+    if button is not None:
+        try: button.close()
+        except Exception: pass
+
     try:
         sensor = DistanceSensor(echo=PIN_ECHO, trigger=PIN_TRIGGER, max_distance=3.0)
         button = Button(PIN_BUTTON, pull_up=True)
-        print("[INFO] GPIO ultrasonic sensor & button initialized successfully.")
+        print(f"[INFO] GPIO sensors initialized (Trigger={PIN_TRIGGER}, Echo={PIN_ECHO}, Button={PIN_BUTTON}).")
     except Exception as e:
-        print(f"[WARN] Could not initialize GPIO pins. Error: {e}")
+        print(f"[WARN] Could not initialize GPIO pins (Trigger={PIN_TRIGGER}, Echo={PIN_ECHO}, Button={PIN_BUTTON}): {e}")
         sensor = None
         button = None
-else:
-    print("[INFO] GPIO unavailable. Running in desktop/simulation mode.")
 
 def get_distance():
     """Safely reads the distance from the ultrasonic sensor in meters."""
@@ -96,6 +111,29 @@ def get_cpu_utilization():
             return min(100.0, load * 25.0)  # Approximate for 4-core Pi 5
     except Exception:
         return 0.0
+
+def get_memory_utilization():
+    """Returns (used_mb, total_mb, percent) for system RAM on Raspberry Pi / Linux."""
+    if PSUTIL_AVAILABLE:
+        try:
+            vm = psutil.virtual_memory()
+            return vm.used / (1024 * 1024), vm.total / (1024 * 1024), vm.percent
+        except Exception:
+            pass
+    try:
+        with open("/proc/meminfo", "r") as f:
+            mem_info = {}
+            for line in f:
+                parts = line.split(":")
+                if len(parts) == 2:
+                    mem_info[parts[0].strip()] = int(parts[1].strip().split()[0])
+            total_kb = mem_info.get("MemTotal", 2097152)
+            avail_kb = mem_info.get("MemAvailable", total_kb // 2)
+            used_kb = max(0, total_kb - avail_kb)
+            pct = (used_kb / total_kb) * 100.0 if total_kb > 0 else 0.0
+            return used_kb / 1024.0, total_kb / 1024.0, pct
+    except Exception:
+        return 0.0, 2048.0, 0.0
 
 
 # ==========================================
@@ -234,6 +272,11 @@ class ThreadedCameraStream:
                     self.cap = cv2.VideoCapture(dev_idx)
 
                 if self.cap is not None and self.cap.isOpened():
+                    # Keep buffer size to 1 to eliminate frame backlog and minimize RAM on 2GB Pi 5
+                    try:
+                        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                    except Exception:
+                        pass
                     self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
                     self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
                     grabbed, frame = self.cap.read()
@@ -298,7 +341,13 @@ def main():
     parser.add_argument("--headless", action="store_true", help="Run without graphical display window")
     parser.add_argument("--classes", type=str, default=None,
                         help="Custom classes: comma-separated list or path to a text file containing class names")
+    parser.add_argument("--trigger-pin", type=int, default=23, help="HC-SR04 trigger GPIO pin (default: 23)")
+    parser.add_argument("--echo-pin", type=int, default=24, help="HC-SR04 echo GPIO pin (default: 24)")
+    parser.add_argument("--button-pin", type=int, default=17, help="Tactile push button GPIO pin (default: 17)")
     args = parser.parse_args()
+
+    # Initialize GPIO Sensors with configured pins
+    init_sensors(trigger_pin=args.trigger_pin, echo_pin=args.echo_pin, button_pin=args.button_pin)
 
     # Auto-detect assistive 92 model if not specified (script-relative path)
     default_model_path = os.path.join(BASE_DIR, "model_files", "yolov8_assistive_92.onnx")
@@ -321,9 +370,22 @@ def main():
             custom_classes = [c.strip() for c in classes_file.split(",") if c.strip()]
         print(f"[INFO] Loaded {len(custom_classes)} custom classes from {classes_file}")
 
+    # Auto-detect headless environment (SSH, service, or no GUI display on Pi 5)
+    headless_mode = args.headless
+    if not headless_mode and sys.platform.startswith("linux"):
+        if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+            print("[INFO] No active GUI display detected ($DISPLAY / $WAYLAND_DISPLAY unset).")
+            print("[INFO] Automatically switching to --headless mode (optimized for Raspberry Pi 5 2GB).")
+            headless_mode = True
+
+    # Memory Pre-flight & Telemetry
+    ram_used, ram_total, ram_pct = get_memory_utilization()
     print("\n" + "=" * 65)
     print("  Raspberry Pi 5 Smart Vision Assistant (CPU-Optimized YOLOv8)")
-    print(f"  Configuration: Resolution {args.resolution}x{args.resolution} | Confidence {args.conf}")
+    print(f"  Configuration: Resolution {args.resolution}x{args.resolution} | Confidence {args.conf} | Mode: {'Headless' if headless_mode else 'GUI Window'}")
+    print(f"  System RAM   : {ram_used:.0f} MB used / {ram_total:.0f} MB total ({ram_pct:.1f}%)")
+    if ram_total <= 2300:
+        print("  Pi 5 Variant : 2 GB RAM detected. Memory guard & tensor optimizations active.")
     print("=" * 65 + "\n")
 
     # Initialize CPU YOLOv8 Detector
@@ -383,6 +445,9 @@ def main():
                 camera_lost_alerted = False
 
             frame_count += 1
+            if frame_count % 300 == 0:
+                gc.collect()
+
             elapsed = time.time() - fps_start_time
             if elapsed >= 1.0:
                 current_fps = frame_count / elapsed
@@ -439,11 +504,12 @@ def main():
                 last_scan_time = time.time()
 
             # Graphical Telemetry Display
-            if not args.headless:
+            if not headless_mode:
                 h, w = frame.shape[:2]
                 x_left = int(w * 0.35)
                 x_right = int(w * 0.65)
                 cpu_load = get_cpu_utilization()
+                ram_u, ram_t, ram_p = get_memory_utilization()
 
                 # Draw 9-Part Spatial Grid (Top 3, Middle 3, Bottom 3)
                 col1 = int(w / 3.0)
@@ -484,8 +550,8 @@ def main():
                 # Draw Telemetry HUD
                 cv2.putText(frame, f"Mode: CPU YOLOv8 ({args.resolution}x{args.resolution})",
                             (10, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (0, 255, 0), 2)
-                cv2.putText(frame, f"FPS: {current_fps:.1f} | CPU: {cpu_load:.1f}%",
-                            (10, 44), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 255), 2)
+                cv2.putText(frame, f"FPS: {current_fps:.1f} | CPU: {cpu_load:.0f}% | RAM: {ram_u:.0f}/{ram_t:.0f}MB ({ram_p:.0f}%)",
+                            (10, 44), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 2)
                 dist_color = (0, 0, 255) if distance_meters < 1.0 else (0, 255, 255)
                 cv2.putText(frame, f"Distance: {distance_meters:.2f}m",
                             (10, 66), cv2.FONT_HERSHEY_SIMPLEX, 0.52, dist_color, 2)

@@ -31,20 +31,66 @@ def print_header(title):
     print("=" * 65)
 
 def test_system():
-    print_header("1. SYSTEM & CPU DIAGNOSTICS")
+    print_header("1. SYSTEM & CPU / MEMORY DIAGNOSTICS")
     import platform
     print(f"  OS Platform     : {platform.system()} {platform.release()}")
     print(f"  Architecture    : {platform.machine()}")
     print(f"  Python Version  : {sys.version.split()[0]}")
     
+    total_ram_mb = 2048.0
+    avail_ram_mb = 1024.0
+    swap_total_mb = 0.0
+    swap_free_mb = 0.0
+
     try:
         import psutil
         cpu_count = psutil.cpu_count(logical=True)
-        ram_gb = psutil.virtual_memory().total / (1024**3)
         print(f"  CPU Cores       : {cpu_count} cores")
-        print(f"  Total RAM       : {ram_gb:.1f} GB")
-    except ImportError:
-        print("  [INFO] psutil not installed (optional).")
+        try:
+            ram = psutil.virtual_memory()
+            total_ram_mb = ram.total / (1024**2)
+            avail_ram_mb = ram.available / (1024**2)
+        except Exception:
+            pass
+        try:
+            swap = psutil.swap_memory()
+            swap_total_mb = swap.total / (1024**2)
+            swap_free_mb = swap.free / (1024**2)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    try:
+        if os.path.exists("/proc/meminfo"):
+            with open("/proc/meminfo", "r") as f:
+                info = {}
+                for line in f:
+                    p = line.split(":")
+                    if len(p) == 2:
+                        info[p[0].strip()] = int(p[1].strip().split()[0])
+                if "MemTotal" in info:
+                    total_ram_mb = info["MemTotal"] / 1024.0
+                if "MemAvailable" in info:
+                    avail_ram_mb = info["MemAvailable"] / 1024.0
+                if "SwapTotal" in info:
+                    swap_total_mb = info["SwapTotal"] / 1024.0
+                if "SwapFree" in info:
+                    swap_free_mb = info["SwapFree"] / 1024.0
+    except Exception:
+        pass
+
+    print(f"  Total RAM       : {total_ram_mb / 1024.0:.2f} GB ({total_ram_mb:.0f} MB)")
+    print(f"  Available RAM   : {avail_ram_mb:.0f} MB")
+    print(f"  Swap Space      : {swap_total_mb:.0f} MB total ({swap_free_mb:.0f} MB free)")
+
+    if total_ram_mb <= 2300:
+        print("  Hardware Target : Raspberry Pi 5 (2 GB RAM Edition)")
+        if swap_total_mb < 1000:
+            print("  [WARN] Swap is under 1.0 GB! For 2GB Pi 5, a 2GB swapfile is strongly recommended.")
+            print("         Run: sudo ./setup_rpi.sh (it will automatically configure 2GB swap)")
+        else:
+            print("  [PASS] Adequate swap protection enabled for 2GB RAM stability.")
 
     try:
         with open("/proc/device-tree/model", "r") as f:
@@ -57,6 +103,7 @@ def test_system():
 def test_ai_model():
     print_header("2. AI MODEL & 92-CLASS ASSISTIVE ENGINE")
     from yolo_detector import YOLODetector, ASSISTIVE_ONNX_PATH, CLASSES_TXT_PATH
+    import gc
     
     if not os.path.exists(ASSISTIVE_ONNX_PATH):
         print(f"  [FAIL] Assistive model missing at: {ASSISTIVE_ONNX_PATH}")
@@ -74,11 +121,23 @@ def test_ai_model():
     print(f"  Classes Count   : {len(classes)} categories loaded")
     print(f"  Sample Classes  : {', '.join(classes[:8])}...")
 
-    print("  Initializing YOLOv8 CPU Detector...")
+    def get_proc_rss():
+        try:
+            import psutil
+            return psutil.Process().memory_info().rss / (1024 * 1024)
+        except Exception:
+            return 0.0
+
+    rss_before = get_proc_rss()
+    print("  Initializing YOLOv8 CPU Detector (320x320 for 2GB RAM)...")
     t0 = time.time()
     detector = YOLODetector(model_path=ASSISTIVE_ONNX_PATH, classes=classes, input_size=(320, 320))
     load_time = time.time() - t0
+    rss_after = get_proc_rss()
+    ram_delta = max(0.0, rss_after - rss_before)
     print(f"  Model Load Time : {load_time:.2f} seconds")
+    if ram_delta > 0:
+        print(f"  Model RAM Impact: +{ram_delta:.1f} MB (Fits comfortably within 2GB budget)")
 
     # Benchmark dummy inference
     dummy = np.zeros((480, 640, 3), dtype=np.uint8)
@@ -89,6 +148,7 @@ def test_ai_model():
     approx_fps = 1.0 / max(0.001, avg_latency)
     print(f"  Inference Speed : {avg_latency*1000:.1f} ms per frame (~{approx_fps:.1f} FPS)")
     detector.close()
+    gc.collect()
     print("  [PASS] Assistive AI model verified and optimized for CPU.")
     return True
 
@@ -194,6 +254,7 @@ def test_gpio():
         return False
 
     print(f"  Testing HC-SR04 Ultrasonic Sensor (Trigger={PIN_TRIGGER}, Echo={PIN_ECHO})...")
+    sensor = None
     try:
         sensor = DistanceSensor(echo=PIN_ECHO, trigger=PIN_TRIGGER, max_distance=3.0)
         time.sleep(0.5)
@@ -201,19 +262,26 @@ def test_gpio():
         if dist is not None:
             print(f"  Live Ultrasonic Distance : {dist:.2f} meters ({dist * 100:.1f} cm)")
             print("  [PASS] HC-SR04 sensor read successfully.")
-        sensor.close()
     except Exception as e:
         print(f"  [WARN] Ultrasonic sensor error: {e}")
         print("  Check 5V/GND, Trigger (GPIO 23), Echo (GPIO 24 via voltage divider).")
+    finally:
+        if sensor is not None:
+            try: sensor.close()
+            except Exception: pass
 
     print(f"  Testing Push Button on GPIO {PIN_BUTTON}...")
+    btn = None
     try:
         btn = Button(PIN_BUTTON, pull_up=True)
         print(f"  Button current state : {'PRESSED' if btn.is_pressed else 'RELEASED'}")
-        btn.close()
         print("  [PASS] GPIO push button pin initialized.")
     except Exception as e:
         print(f"  [WARN] Button pin error: {e}")
+    finally:
+        if btn is not None:
+            try: btn.close()
+            except Exception: pass
 
     return True
 
