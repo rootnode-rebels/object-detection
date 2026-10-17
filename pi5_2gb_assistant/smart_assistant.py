@@ -263,11 +263,14 @@ class ThreadedCameraStream:
         for idx in [0, 1, 2]:
             if idx not in candidate_indices:
                 candidate_indices.append(idx)
-
         for dev_idx in candidate_indices:
             try:
                 if sys.platform.startswith("linux"):
                     self.cap = cv2.VideoCapture(dev_idx, cv2.CAP_V4L2)
+                    if not self.cap.isOpened():
+                        try: self.cap.release()
+                        except Exception: pass
+                        self.cap = cv2.VideoCapture(dev_idx)
                 else:
                     self.cap = cv2.VideoCapture(dev_idx)
 

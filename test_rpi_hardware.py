@@ -221,6 +221,10 @@ def test_camera():
         try:
             if sys.platform.startswith("linux"):
                 cap = cv2.VideoCapture(idx, cv2.CAP_V4L2)
+                if not cap.isOpened():
+                    try: cap.release()
+                    except Exception: pass
+                    cap = cv2.VideoCapture(idx)
             else:
                 cap = cv2.VideoCapture(idx)
             
@@ -250,7 +254,7 @@ def test_gpio():
         from gpiozero import DistanceSensor, Button
     except ImportError:
         print("  [WARN] 'gpiozero' is not installed or running outside Raspberry Pi.")
-        print("  Fix: Run 'sudo apt install python3-gpiozero -y'")
+        print("  Fix: Run 'sudo apt install python3-gpiozero python3-lgpio -y'")
         return False
 
     print(f"  Testing HC-SR04 Ultrasonic Sensor (Trigger={PIN_TRIGGER}, Echo={PIN_ECHO})...")
@@ -264,6 +268,8 @@ def test_gpio():
             print("  [PASS] HC-SR04 sensor read successfully.")
     except Exception as e:
         print(f"  [WARN] Ultrasonic sensor error: {e}")
+        if "pin factory" in str(e).lower() or "badpin" in str(e).lower():
+            print("  [TIP] On Raspberry Pi 5 RP1, install lgpio: sudo apt install python3-lgpio -y")
         print("  Check 5V/GND, Trigger (GPIO 23), Echo (GPIO 24 via voltage divider).")
     finally:
         if sensor is not None:
@@ -278,6 +284,8 @@ def test_gpio():
         print("  [PASS] GPIO push button pin initialized.")
     except Exception as e:
         print(f"  [WARN] Button pin error: {e}")
+        if "pin factory" in str(e).lower() or "badpin" in str(e).lower():
+            print("  [TIP] On Raspberry Pi 5 RP1, install lgpio: sudo apt install python3-lgpio -y")
     finally:
         if btn is not None:
             try: btn.close()

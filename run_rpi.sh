@@ -104,8 +104,14 @@ echo "[INFO] Starting Smart Vision Assistant on Raspberry Pi 5..."
 echo "       Press Ctrl+C to stop."
 echo ""
 
+# Detect Python command (wrap with libcamerify if CSI camera module is detected on Raspberry Pi OS)
+PY_CMD="python3"
+if command -v libcamerify &>/dev/null && [ ! -e /dev/video0 ]; then
+    PY_CMD="libcamerify python3"
+fi
+
 # Execute with 320x320 resolution (optimal FPS & lowest RAM for Pi 5 2GB)
-python3 smart_assistant.py \
+$PY_CMD smart_assistant.py \
     "${MODEL_ARGS[@]}" \
     --resolution 320 \
     "${RUN_ARGS[@]}"

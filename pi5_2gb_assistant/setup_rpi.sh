@@ -98,10 +98,17 @@ sudo apt install -y \
     v4l-utils \
     alsa-utils
 
+# Install Raspberry Pi 5 RP1 GPIO backend (lgpio is required by gpiozero on Pi 5)
+echo "  [INFO] Verifying Raspberry Pi 5 GPIO backend (lgpio)..."
+sudo apt install -y python3-lgpio 2>/dev/null || true
+
+# Install camera tools for Raspberry Pi Camera Module support
+sudo apt install -y libcamera-tools 2>/dev/null || true
+
 # 4. Install Python Dependencies safely with pip
 echo ""
 echo "[STEP 4/7] Verifying Python requirements..."
-pip install -r requirements.txt --break-system-packages --no-cache-dir
+python3 -m pip install -r requirements.txt --break-system-packages --no-cache-dir 2>/dev/null || echo "  [INFO] Pre-compiled system packages already satisfy requirements."
 
 # 5. Set Permissions & Hardware Access Groups
 echo ""

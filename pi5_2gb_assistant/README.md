@@ -42,6 +42,21 @@ ssh pi@raspberrypi.local
 cd ~/pi5_2gb_assistant
 ```
 
+### Method C: Headless Laptop-Only Setup (No Monitor, Keyboard, or Mouse for Pi)
+If you only have the Pi board, charger, and a laptop:
+1. Flash your MicroSD card using **Raspberry Pi Imager** on your laptop.
+2. In **Edit Settings**: set hostname to `raspberrypi`, set user to `pi`, enter your Wi-Fi name & password, and in **Services** check **Enable SSH**.
+3. Insert SD card into Pi, plug in the USB-C charger, and wait 60 seconds.
+4. On Windows laptop PowerShell, connect via:
+   ```powershell
+   ssh pi@raspberrypi.local
+   ```
+5. In a second PowerShell window, upload the package:
+   ```powershell
+   scp -r "c:\Users\suhas\Desktop\test\ai-object-detection-main\pi5_2gb_assistant" pi@raspberrypi.local:/home/pi/
+   ```
+6. Switch back to your SSH window to run setup!
+
 ---
 
 ## 3. One-Click Setup on Raspberry Pi 5
