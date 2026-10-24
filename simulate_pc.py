@@ -26,6 +26,8 @@ import subprocess
 import argparse
 import tempfile
 import numpy as np
+import math
+import re
 
 # Ensure current directory is in sys.path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -142,7 +144,133 @@ def get_resource_path(relative_path):
 
 
 # ==========================================
-# 2. PC SIMULATOR APPLICATION
+# 2. HARDWARE SERIAL SONAR BRIDGE (OPTIONAL)
+# ==========================================
+class SerialSonarBridge:
+    """Reads real-time distance packets from an external microcontroller (Arduino/ESP32) running sonar_firmware.ino."""
+    def __init__(self, port, baud=115200):
+        self.port = port
+        self.baud = baud
+        self.latest_distance = None
+        self.running = False
+        self.thread = None
+        self.lock = threading.Lock()
+
+    def start(self):
+        try:
+            import serial
+            self.ser = serial.Serial(self.port, self.baud, timeout=1.0)
+            self.running = True
+            self.thread = threading.Thread(target=self._worker, daemon=True)
+            self.thread.start()
+            print(f"[SUCCESS] Serial Sonar Bridge active on {self.port} @ {self.baud} baud.")
+            return True
+        except Exception as e:
+            print(f"[WARN] Serial Sonar Bridge failed to connect to {self.port}: {e}")
+            return False
+
+    def _worker(self):
+        while self.running:
+            try:
+                line = self.ser.readline().decode('utf-8', errors='ignore').strip()
+                if not line:
+                    continue
+                m = re.search(r"[-+]?(?:\d*\.\d+|\d+)", line)
+                if m:
+                    val = float(m.group())
+                    if val > 10.0:
+                        val = val / 100.0  # Convert cm to meters
+                    if 0.02 <= val <= 3.5:
+                        with self.lock:
+                            self.latest_distance = round(val, 2)
+            except Exception:
+                time.sleep(0.04)
+
+    def get_distance(self):
+        with self.lock:
+            return self.latest_distance
+
+    def stop(self):
+        self.running = False
+        try:
+            if hasattr(self, 'ser') and self.ser is not None:
+                self.ser.close()
+        except Exception:
+            pass
+
+
+def draw_sonar_radar_widget(frame, distance_m, radar_angle, is_hardware=False):
+    """
+    Renders an acoustic sonar radar sweep display in the upper right quadrant of the HUD.
+    Features:
+    - 3 Concentric acoustic distance ranges (1.0m, 2.0m, 3.0m).
+    - Rotating sweep beam simulating active ultrasonic pulses.
+    - Blip dot indicating detected obstacle position.
+    """
+    h, w = frame.shape[:2]
+    cx, cy = w - 85, 42
+    r_max = 34
+
+    # Background radar disc
+    cv2.circle(frame, (cx, cy), r_max, (10, 20, 32), -1, cv2.LINE_AA)
+    cv2.circle(frame, (cx, cy), r_max, (45, 65, 85), 1, cv2.LINE_AA)
+
+    # Range rings for 1.0m, 2.0m, 3.0m
+    cv2.circle(frame, (cx, cy), int(r_max * 0.33), (25, 45, 65), 1, cv2.LINE_AA)
+    cv2.circle(frame, (cx, cy), int(r_max * 0.66), (30, 55, 75), 1, cv2.LINE_AA)
+
+    # Crosshairs
+    cv2.line(frame, (cx - r_max, cy), (cx + r_max, cy), (35, 55, 75), 1)
+    cv2.line(frame, (cx, cy - r_max), (cx, cy + r_max), (35, 55, 75), 1)
+
+    # Rotating acoustic sweep ray
+    rad = math.radians(radar_angle)
+    sx = int(cx + r_max * math.cos(rad))
+    sy = int(cy + r_max * math.sin(rad))
+    cv2.line(frame, (cx, cy), (sx, sy), (0, 255, 180), 1, cv2.LINE_AA)
+
+    # Obstacle blip on radar
+    if distance_m is not None and 0.0 < distance_m <= 3.0:
+        ratio = min(1.0, distance_m / 3.0)
+        blip_r = int(ratio * (r_max - 4))
+        bx = cx
+        by = cy - blip_r
+        blip_color = (0, 0, 255) if distance_m < 1.0 else ((0, 165, 255) if distance_m < 2.0 else (0, 255, 100))
+        cv2.circle(frame, (bx, by), 4, blip_color, -1, cv2.LINE_AA)
+        cv2.circle(frame, (bx, by), 6, blip_color, 1, cv2.LINE_AA)
+
+    # Widget Tag
+    tag = "HW SONAR" if is_hardware else "SONAR RADAR"
+    tag_color = (0, 255, 200) if is_hardware else (140, 180, 200)
+    cv2.putText(frame, tag, (cx - 28, cy + r_max + 11), cv2.FONT_HERSHEY_SIMPLEX, 0.30, tag_color, 1, cv2.LINE_AA)
+
+
+# Proximity beep state
+_last_beep_time = 0.0
+
+def play_sonar_beep(dist, is_muted=False):
+    """Triggers an acoustic proximity click/beep when an obstacle is within 1.0 meter."""
+    global _last_beep_time
+    if is_muted or dist is None or dist >= 1.0:
+        return
+    now = time.time()
+    # Beep faster when closer: interval scales from 0.15s (very close) to 0.5s (1.0m)
+    beep_interval = max(0.12, dist * 0.45)
+    if now - _last_beep_time >= beep_interval:
+        _last_beep_time = now
+        if sys.platform == "win32":
+            def _beep_worker():
+                try:
+                    import winsound
+                    freq = int(1400 - (dist * 500))
+                    winsound.Beep(max(400, min(2400, freq)), 35)
+                except Exception:
+                    pass
+            threading.Thread(target=_beep_worker, daemon=True).start()
+
+
+# ==========================================
+# 3. PC SIMULATOR APPLICATION
 # ==========================================
 def main():
     parser = argparse.ArgumentParser(description="PC Simulator for Assistive Vision Device")
@@ -151,6 +279,7 @@ def main():
     parser.add_argument("--cam", type=int, default=0, help="Webcam device index (default: 0)")
     parser.add_argument("--resolution", type=int, default=320, help="Input resolution: 320 for high FPS")
     parser.add_argument("--conf", type=float, default=0.45, help="Confidence threshold (default: 0.45)")
+    parser.add_argument("--sonar-port", type=str, default=None, help="Serial COM port for USB HC-SR04 Arduino bridge (e.g. COM3 or /dev/ttyUSB0)")
     args = parser.parse_args()
 
     # Auto-detect assistive 92 model and classes
@@ -224,11 +353,20 @@ def main():
     except Exception:
         pass
 
+    # Initialize Hardware Serial Sonar Bridge if requested
+    serial_sonar = None
+    if args.sonar_port:
+        serial_sonar = SerialSonarBridge(args.sonar_port)
+        if not serial_sonar.start():
+            serial_sonar = None
+
     # Simulation State
     distance_meters = 1.80
     virtual_offset_x = 0  # Horizontal shift for simulated obstacle (-180 to +180)
     auto_walk = False
     walk_direction = -1  # moving closer
+    radar_angle = 0
+    sonar_beep_muted = False
     last_scan_time = time.time()
     COOLDOWN = 3.0
     current_announcement = "Simulation Ready. Automatic obstacle detection active."
@@ -241,16 +379,19 @@ def main():
 
     print("\n" + "=" * 65)
     print("  ASSISTIVE VISION PC SIMULATOR RUNNING")
-    print(f"  Camera Mode : {'VIRTUAL SYNTHETIC SCENE' if virtual_cam else 'LIVE WEBCAM'}")
-    print("  Automatic Voice Guidance : ENABLED (speaks immediately when obstacle detected)")
+    print(f"  Camera Mode   : {'VIRTUAL SYNTHETIC SCENE' if virtual_cam else 'LIVE WEBCAM'}")
+    print(f"  Sonar Mode    : {'HARDWARE BRIDGE (' + args.sonar_port + ')' if serial_sonar else 'SIMULATED ACOUSTIC RADAR'}")
+    print("  Auto Voice    : ENABLED (Speaks navigation cues in real time)")
     print("  Controls:")
-    print("    [SPACE]     : Push Button Trigger (Manual Query)")
-    print("    [W] / [UP]  : Move closer to obstacle")
-    print("    [S] / [DOWN]: Move farther from obstacle")
+    print("    [SPACE]     : Push Button Trigger (Manual Surroundings Query)")
+    print("    [W] / [UP]  : Decrease Sonar Distance (Move closer to obstacle)")
+    print("    [S] / [DOWN]: Increase Sonar Distance (Move farther from obstacle)")
+    print("    [A]         : Toggle Sonar Auto-Walk Radar Mode")
+    print("    [B]         : Toggle Sonar Proximity Acoustic Beep (Mute/Unmute)")
+    print("    [0]         : Reset Sonar Distance to 2.0m")
     print("    [J] / [LEFT]: Shift obstacle to LEFT")
     print("    [K] / [RGHT]: Shift obstacle to RIGHT")
     print("    [C]         : Center obstacle")
-    print("    [A]         : Toggle Auto-walk radar simulation")
     print("    [Q] / [ESC] : Quit Simulation")
     print("=" * 65 + "\n")
 
@@ -287,8 +428,13 @@ def main():
                 frame_count = 0
                 fps_start = time.time()
 
-            # Handle Auto-walk mode
-            if auto_walk:
+            # Update Sonar Radar sweep angle and distance
+            radar_angle = (radar_angle + 8) % 360
+            if serial_sonar is not None:
+                hw_dist = serial_sonar.get_distance()
+                if hw_dist is not None:
+                    distance_meters = hw_dist
+            elif auto_walk:
                 distance_meters += walk_direction * 0.03
                 if distance_meters <= 0.4:
                     distance_meters = 0.4
@@ -296,6 +442,9 @@ def main():
                 elif distance_meters >= 2.5:
                     distance_meters = 2.5
                     walk_direction = -1
+
+            # Acoustic proximity warning beep for visually impaired guidance
+            play_sonar_beep(distance_meters, is_muted=sonar_beep_muted)
 
             # Keyboard Input
             key = cv2.waitKey(1) & 0xFF
@@ -333,10 +482,15 @@ def main():
             elif key == ord('3'):  # Query Low-Right
                 manual_trigger = True
                 target_sector = "bottom-right"
-            elif key in [ord('w'), ord('W'), 82]:  # W or UP arrow
+            elif key in [ord('w'), ord('W'), 82]:  # W or UP arrow (decrease distance)
                 distance_meters = max(0.2, distance_meters - 0.15)
-            elif key in [ord('s'), ord('S'), 84]:  # S or DOWN arrow
+            elif key in [ord('s'), ord('S'), 84]:  # S or DOWN arrow (increase distance)
                 distance_meters = min(3.0, distance_meters + 0.15)
+            elif key in [ord('b'), ord('B')]:  # B = Toggle Sonar Beep
+                sonar_beep_muted = not sonar_beep_muted
+                print(f"[SONAR] Proximity Beep: {'MUTED' if sonar_beep_muted else 'ACTIVE'}")
+            elif key == ord('0'):  # 0 = Reset Sonar to 2.0m
+                distance_meters = 2.0
             elif key in [ord('j'), ord('J'), 81]:  # J or LEFT arrow
                 virtual_offset_x = max(-180, virtual_offset_x - 30)
             elif key in [ord('k'), ord('K'), 83]:  # K or RIGHT arrow
@@ -345,7 +499,7 @@ def main():
                 virtual_offset_x = 0
             elif key in [ord('a'), ord('A')]:  # Toggle auto-walk
                 auto_walk = not auto_walk
-                print(f"[SIM] Auto-walk mode: {'ENABLED' if auto_walk else 'DISABLED'}")
+                print(f"[SIM] Sonar Auto-walk mode: {'ENABLED' if auto_walk else 'DISABLED'}")
 
             # Run detection on current frame
             detections = []
@@ -478,24 +632,28 @@ def main():
             cv2.rectangle(frame, (0, 0), (w, 85), banner_color, -1)
             cv2.line(frame, (0, 85), (w, 85), (56, 189, 248), 1)
 
+            # Draw Real-Time Sonar Acoustic Radar Widget
+            draw_sonar_radar_widget(frame, distance_meters, radar_angle, is_hardware=(serial_sonar is not None))
+
             # Status indicators
             dist_color = (0, 0, 255) if distance_meters < 1.0 else (0, 255, 0)
-            status_text = "PROXIMITY ALERT (<1.0m)" if distance_meters < 1.0 else "CLEAR PATH"
-            cv2.putText(frame, f"DISTANCE: {distance_meters:.2f}m [{status_text}]",
+            status_text = "PROXIMITY HAZARD (<1.0m)" if distance_meters < 1.0 else "CLEAR PATH"
+            sonar_source = f"HARDWARE ({args.sonar_port})" if serial_sonar else ("AUTO-WALK [A]" if auto_walk else "SIMULATED [W/S]")
+            cv2.putText(frame, f"HC-SR04 SONAR: {distance_meters:.2f}m [{status_text}]",
                         (15, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.58, dist_color, 2)
 
-            walk_mode_str = "AUTO-WALK [ON]" if auto_walk else "MANUAL [W/S]"
             radar_status = "[APPROACHING HAZARD!]" if has_approaching else "[RADAR OK]"
             radar_color = (0, 0, 255) if has_approaching else (0, 255, 180)
-            cv2.putText(frame, f"FPS: {fps:.1f} | Mode: {walk_mode_str} | RADAR: {radar_status}",
-                        (15, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.45, radar_color if has_approaching else (200, 200, 200), 1)
-            cv2.putText(frame, "Hotkeys: [7,8,9] Top 3 | [4,5,6/L,M,R] Mid 3 | [1,2,3] Low 3 | [SPACE] Scan | [W/S] Dist",
-                        (15, 68), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (160, 175, 190), 1)
+            beep_state = "MUTED" if sonar_beep_muted else "ON"
+            cv2.putText(frame, f"FPS: {fps:.1f} | Source: {sonar_source} | Beep: {beep_state} | Status: {radar_status}",
+                        (15, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.44, radar_color if has_approaching else (200, 200, 200), 1)
+            cv2.putText(frame, "Hotkeys: [W/S] Sonar Dist | [A] Auto-Walk | [B] Sonar Beep | [0] Reset | [SPACE] Scan | [Q] Quit",
+                        (15, 68), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (160, 175, 190), 1)
 
             # Radar Distance Indicator Bar
-            bar_w = int((distance_meters / 3.0) * (w - 30))
+            bar_w = int((distance_meters / 3.0) * (w - 180))
             cv2.rectangle(frame, (15, 74), (15 + bar_w, 80), dist_color, -1)
-            cv2.rectangle(frame, (15, 74), (w - 15, 80), (60, 65, 75), 1)
+            cv2.rectangle(frame, (15, 74), (w - 165, 80), (60, 65, 75), 1)
 
             # 4. Bottom Voice Feedback Transcript Banner
             cv2.rectangle(frame, (0, h - 45), (w, h), (15, 23, 42), -1)
@@ -508,6 +666,8 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        if serial_sonar is not None:
+            serial_sonar.stop()
         if cap is not None and not virtual_cam:
             try:
                 cap.release()

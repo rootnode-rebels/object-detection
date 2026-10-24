@@ -7,14 +7,22 @@ Runs on Raspberry Pi 5 (CPU-Optimized, No NPU Required).
 - Real-Time HUD with Live FPS, CPU Load %, and Distance
 """
 
-import cv2
-import time
 import os
 import sys
+
+# Crucial memory optimization for 2GB RAM Raspberry Pi 5:
+# Prevent glibc multi-threaded memory arena fragmentation (caps arenas to 2 instead of 32)
+os.environ["MALLOC_ARENA_MAX"] = "2"
+
+import cv2
+import time
 import subprocess
 import threading
 import argparse
 import gc
+import warnings
+import glob
+import re
 
 # Ensure current directory is in sys.path
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -50,44 +58,109 @@ PIN_BUTTON = 17
 
 sensor = None
 button = None
+sonar_disabled = True
+sonar_reading = 3.0
+sonar_thread = None
+sonar_thread_running = False
 
-def init_sensors(trigger_pin=23, echo_pin=24, button_pin=17):
-    """Initializes hardware GPIO sensors (HC-SR04 ultrasonic distance sensor & tactile button)."""
-    global sensor, button, PIN_TRIGGER, PIN_ECHO, PIN_BUTTON
+def _sonar_worker():
+    """Background daemon thread to poll ultrasonic sensor without blocking the camera vision loop."""
+    global sensor, sonar_reading, sonar_disabled, sonar_thread_running
+    consecutive_errors = 0
+    while sonar_thread_running and not sonar_disabled and sensor is not None:
+        try:
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                d = sensor.distance
+                has_no_echo = any("no echo" in str(item.message).lower() for item in w)
+                if has_no_echo or d is None:
+                    consecutive_errors += 1
+                else:
+                    consecutive_errors = 0
+                    if 0.0 <= d <= 3.0:
+                        sonar_reading = d
+
+            if consecutive_errors >= 4:
+                print("[WARN] Ultrasonic echo signal lost. Auto-switching to pure high-speed camera mode.")
+                sonar_disabled = True
+                break
+        except Exception:
+            consecutive_errors += 1
+            if consecutive_errors >= 4:
+                sonar_disabled = True
+                break
+        time.sleep(0.08)  # Sample at ~12 Hz asynchronously
+
+def init_sensors(trigger_pin=23, echo_pin=24, button_pin=17, enable_sonar=True):
+    """
+    Initializes hardware GPIO sensors (HC-SR04 ultrasonic distance sensor & tactile button).
+    Features non-blocking pre-flight probe: automatically detects if ECHO pin is desoldered,
+    bypassing sonar with zero latency tonight, while seamlessly activating when soldered tomorrow!
+    """
+    global sensor, button, PIN_TRIGGER, PIN_ECHO, PIN_BUTTON, sonar_disabled, sonar_reading, sonar_thread, sonar_thread_running
     PIN_TRIGGER = trigger_pin
     PIN_ECHO = echo_pin
     PIN_BUTTON = button_pin
 
     if not GPIO_AVAILABLE:
         print("[INFO] GPIO unavailable. Running in desktop/simulation mode.")
+        sonar_disabled = True
         return
 
     if sensor is not None:
         try: sensor.close()
         except Exception: pass
+        sensor = None
     if button is not None:
         try: button.close()
         except Exception: pass
+        button = None
+
+    sonar_thread_running = False
+
+    if enable_sonar:
+        try:
+            candidate_sensor = DistanceSensor(echo=PIN_ECHO, trigger=PIN_TRIGGER, max_distance=3.0)
+            # Pre-flight probe: verify echo pulse responds before locking into radar mode
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                probe = candidate_sensor.distance
+                has_no_echo = any("no echo" in str(item.message).lower() for item in w)
+                if has_no_echo or probe is None:
+                    print("[INFO] Ultrasonic ECHO pin not detected (hardware desoldered / unplugged).")
+                    print("[INFO] Auto-engaging pure high-speed vision mode. Push button active on GPIO 17.")
+                    candidate_sensor.close()
+                    sensor = None
+                    sonar_disabled = True
+                else:
+                    sensor = candidate_sensor
+                    sonar_disabled = False
+                    sonar_reading = probe
+                    sonar_thread_running = True
+                    sonar_thread = threading.Thread(target=_sonar_worker, daemon=True)
+                    sonar_thread.start()
+                    print(f"[INFO] Ultrasonic hardware healthy! Live echo verified: {probe:.2f}m. Multi-modal radar ACTIVE.")
+        except Exception as e:
+            print(f"[INFO] Ultrasonic radar offline ({e}). Running vision-only mode.")
+            sensor = None
+            sonar_disabled = True
+    else:
+        print("[INFO] Ultrasonic radar disabled via --no-sonar flag.")
+        sonar_disabled = True
 
     try:
-        sensor = DistanceSensor(echo=PIN_ECHO, trigger=PIN_TRIGGER, max_distance=3.0)
         button = Button(PIN_BUTTON, pull_up=True)
-        print(f"[INFO] GPIO sensors initialized (Trigger={PIN_TRIGGER}, Echo={PIN_ECHO}, Button={PIN_BUTTON}).")
+        print(f"[INFO] Tactile push button initialized on GPIO {PIN_BUTTON}.")
     except Exception as e:
-        print(f"[WARN] Could not initialize GPIO pins (Trigger={PIN_TRIGGER}, Echo={PIN_ECHO}, Button={PIN_BUTTON}): {e}")
-        sensor = None
+        print(f"[WARN] Could not initialize push button on GPIO {PIN_BUTTON}: {e}")
         button = None
 
 def get_distance():
-    """Safely reads the distance from the ultrasonic sensor in meters."""
-    if sensor is not None:
-        try:
-            dist = sensor.distance
-            if dist is not None and 0.0 <= dist <= 3.0:
-                return dist
-        except Exception:
-            pass
-    return 3.0
+    """Returns the latest ultrasonic distance in O(1) time without blocking the video thread."""
+    global sonar_reading, sonar_disabled
+    if sonar_disabled:
+        return 3.0
+    return sonar_reading
 
 def is_button_pressed():
     """Safely checks whether the hardware push button is pressed."""
@@ -245,11 +318,87 @@ def stop_tts():
 # ==========================================
 # 3. THREADED CAMERA STREAM (ZERO BUFFER LAG)
 # ==========================================
+def discover_capture_cameras(src=0):
+    """
+    Identifies genuine video capture devices on Linux / Raspberry Pi 5.
+    Filters out internal Pi 5 hardware codecs, ISPs, and M2M queues (/dev/video19 - /dev/video35)
+    which are NOT cameras and cause 10-second select() timeouts.
+    """
+    if not sys.platform.startswith("linux"):
+        candidate_indices = [src]
+        for idx in [0, 1, 2]:
+            if idx not in candidate_indices:
+                candidate_indices.append(idx)
+        return candidate_indices
+
+    candidate_indices = []
+
+    # Priority 1: Check /dev/v4l/by-id/ (Definitive hardware identifiers for USB webcams)
+    by_id_path = "/dev/v4l/by-id"
+    if os.path.isdir(by_id_path):
+        for link in sorted(os.listdir(by_id_path)):
+            try:
+                real_target = os.path.realpath(os.path.join(by_id_path, link))
+                match = re.search(r"video(\d+)", real_target)
+                if match:
+                    idx = int(match.group(1))
+                    if idx not in candidate_indices:
+                        candidate_indices.append(idx)
+                        print(f"[INFO] USB webcam identified: '{link}' -> /dev/video{idx}")
+            except Exception:
+                pass
+
+    # Priority 2: Filter /sys/class/video4linux/ for true capture devices
+    sys_v4l = "/sys/class/video4linux"
+    blacklist = ["rp1-cfe", "bcm2835", "codec", "pisp", "unicam", "m2m", "isp", "metadata", "stats", "config"]
+    if os.path.isdir(sys_v4l):
+        for vdir in sorted(os.listdir(sys_v4l)):
+            match = re.search(r"video(\d+)", vdir)
+            if not match:
+                continue
+            idx = int(match.group(1))
+
+            dev_name = ""
+            name_file = os.path.join(sys_v4l, vdir, "name")
+            if os.path.isfile(name_file):
+                try:
+                    with open(name_file, "r") as f:
+                        dev_name = f.read().strip().lower()
+                except Exception:
+                    pass
+
+            if any(term in dev_name for term in blacklist):
+                continue
+
+            driver_link = os.path.join(sys_v4l, vdir, "device", "driver")
+            is_uvc = False
+            if os.path.exists(driver_link):
+                try:
+                    drv_name = os.path.basename(os.path.realpath(driver_link)).lower()
+                    if "uvc" in drv_name:
+                        is_uvc = True
+                except Exception:
+                    pass
+
+            if is_uvc and idx not in candidate_indices:
+                candidate_indices.append(idx)
+            elif not any(term in dev_name for term in blacklist) and idx < 10 and idx not in candidate_indices:
+                candidate_indices.append(idx)
+
+    # If user provided a specific src, ensure it's evaluated first
+    if src not in candidate_indices and src < 10:
+        candidate_indices.insert(0, src)
+    elif not candidate_indices:
+        candidate_indices = [0]
+
+    return candidate_indices
+
+
 class ThreadedCameraStream:
     """
     Continuously grabs frames in a background thread.
     Fixes OpenCV buffer delay so read() always returns the immediate live frame.
-    Includes V4L2 acceleration on Raspberry Pi and automatic device fallback.
+    Includes V4L2 acceleration on Raspberry Pi, hardware MJPG compression, and auto-reconnection.
     """
     def __init__(self, src=0, width=640, height=480):
         self.cap = None
@@ -257,12 +406,14 @@ class ThreadedCameraStream:
         self.frame = None
         self.stopped = False
         self.lock = threading.Lock()
+        self.dev_idx = src
+        self.width = width
+        self.height = height
+        self.last_frame_time = time.time()
 
-        # Try specified camera and fallback indices if needed
-        candidate_indices = [src]
-        for idx in [0, 1, 2]:
-            if idx not in candidate_indices:
-                candidate_indices.append(idx)
+        candidate_indices = discover_capture_cameras(src=src)
+        print(f"[INFO] Tested camera capture indices: {candidate_indices}")
+
         for dev_idx in candidate_indices:
             try:
                 if sys.platform.startswith("linux"):
@@ -275,18 +426,29 @@ class ThreadedCameraStream:
                     self.cap = cv2.VideoCapture(dev_idx)
 
                 if self.cap is not None and self.cap.isOpened():
-                    # Keep buffer size to 1 to eliminate frame backlog and minimize RAM on 2GB Pi 5
+                    # Request MJPG hardware compression to prevent USB bandwidth choke on Pi 5
+                    try:
+                        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+                    except Exception:
+                        pass
                     try:
                         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                     except Exception:
                         pass
                     self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
                     self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+                    try:
+                        self.cap.set(cv2.CAP_PROP_FPS, 30)
+                    except Exception:
+                        pass
+
                     grabbed, frame = self.cap.read()
                     if grabbed and frame is not None:
-                        self.grabbed = grabbed
+                        self.grabbed = True
                         self.frame = frame
-                        print(f"[INFO] Camera stream successfully opened on device index {dev_idx}")
+                        self.dev_idx = dev_idx
+                        self.last_frame_time = time.time()
+                        print(f"[INFO] Camera stream successfully opened on device index {dev_idx} (MJPG 30FPS mode)")
                         break
                     else:
                         self.cap.release()
@@ -299,24 +461,72 @@ class ThreadedCameraStream:
             self.thread = threading.Thread(target=self._update, daemon=True)
             self.thread.start()
         else:
-            print(f"[WARN] Could not open camera on indices {candidate_indices}. Check connection.")
+            print("\n" + "=" * 65)
+            print("  [ERROR] Hardware Diagnostic: No USB Camera Detected on Raspberry Pi")
+            print("  1. The USB camera is physically disconnected or its chip crashed from a power glitch.")
+            print("     -> UNPLUG the USB camera cable from the Pi, wait 3 seconds, and PLUG IT BACK IN.")
+            print("     -> Ensure it is plugged into a black USB 2.0 port.")
+            print("  2. Verify in terminal: Run 'lsusb' and 'ls -l /dev/video*'.")
+            print("     -> If the camera is receiving power, /dev/video0 will appear immediately.")
+            print("=" * 65 + "\n")
+
+    def _reopen(self):
+        """Silently re-initializes the camera capture handle without crashing the application."""
+        try:
+            if self.cap is not None:
+                self.cap.release()
+        except Exception:
+            pass
+        time.sleep(0.25)
+        try:
+            if sys.platform.startswith("linux"):
+                self.cap = cv2.VideoCapture(self.dev_idx, cv2.CAP_V4L2)
+                if not self.cap.isOpened():
+                    self.cap = cv2.VideoCapture(self.dev_idx)
+            else:
+                self.cap = cv2.VideoCapture(self.dev_idx)
+
+            if self.cap is not None and self.cap.isOpened():
+                try: self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+                except Exception: pass
+                try: self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                except Exception: pass
+                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+                self.last_frame_time = time.time()
+                print(f"[INFO] Camera stream auto-recovered on device index {self.dev_idx}")
+        except Exception as e:
+            print(f"[WARN] Camera auto-recovery failed: {e}")
 
     def _update(self):
+        consecutive_misses = 0
         while not self.stopped:
             if self.cap is None or not self.cap.isOpened():
                 time.sleep(0.02)
                 continue
             grabbed, frame = self.cap.read()
             with self.lock:
-                self.grabbed = bool(grabbed and frame is not None)
-                if self.grabbed:
+                if grabbed and frame is not None:
+                    self.grabbed = True
                     self.frame = frame
+                    self.last_frame_time = time.time()
+                    consecutive_misses = 0
+                else:
+                    consecutive_misses += 1
+
             if not grabbed:
                 time.sleep(0.01)
+                # Auto-recovery: if stream stalled for > 1.2 seconds (~40 consecutive failed reads)
+                if consecutive_misses > 40:
+                    self._reopen()
+                    consecutive_misses = 0
 
     def read(self):
         with self.lock:
-            if not self.grabbed or self.frame is None:
+            if self.frame is None:
+                return False, None
+            # Allow up to 3.0 seconds of wire jitter without failing read() if we have a frame
+            if time.time() - self.last_frame_time > 3.0:
                 return False, None
             return True, self.frame.copy()
 
@@ -332,7 +542,131 @@ class ThreadedCameraStream:
 
 
 # ==========================================
-# 4. MAIN APPLICATION
+# 4. ASSISTIVE ALERT MANAGER (Stateful Debouncing & Anti-Repetition)
+# ==========================================
+class AssistiveAlertManager:
+    """
+    Intelligent Alert State Manager for Visually Impaired Navigation.
+    
+    Guarantees:
+    1. Zero repeating loop spam (25-second cooldown on static/unchanged scene).
+    2. Instant alert on tactile push button press (full surroundings scan).
+    3. Instant alert on emergency (approaching vehicle/hazard or <1.0m proximity).
+    4. Speaks true state changes (new obstacle or direction change) with 1.2s debouncing to prevent jitter.
+    5. Confirms clear path (requires 2.0s of continuous clear frames before announcing 'Path clear ahead', preventing flutter).
+    """
+    def __init__(self, persistent_cooldown=25.0, change_debounce=1.2, clear_delay=2.0):
+        self.persistent_cooldown = persistent_cooldown
+        self.change_debounce = change_debounce
+        self.clear_delay = clear_delay
+        
+        self.last_spoken_time = 0.0
+        self.last_spoken_sig = None
+        self.last_spoken_text = ""
+        
+        self.candidate_sig = None
+        self.candidate_first_seen = 0.0
+        self.candidate_text = ""
+        
+        self.clear_start_time = None
+
+    def _make_sig(self, detections, emergency=False):
+        return tuple(sorted([(d["class"], d["zone"], d.get("is_approaching", False)) for d in detections])) + (emergency,)
+
+    def evaluate(self, detections, distance_meters, button_pressed):
+        now = time.time()
+        
+        # 1. Tactile Button Pressed -> Immediate full surroundings scan
+        if button_pressed:
+            announcement = format_spatial_announcement(detections, distance_meters=distance_meters, is_full_scan=True)
+            self.last_spoken_time = now
+            self.last_spoken_sig = self._make_sig(detections)
+            self.last_spoken_text = announcement
+            self.candidate_sig = None
+            self.clear_start_time = None
+            return True, announcement, "Tactile Button Pressed (Full Surroundings Scan)"
+
+        # 2. Emergency Hazard: approaching hazard OR proximity < 1.0m (ultrasonic or visual depth)
+        has_approaching = any(d.get("is_approaching", False) for d in detections)
+        sonar_prox = (distance_meters is not None and 0.0 < distance_meters < 1.0)
+        visual_prox = any(
+            ("middle" in d.get("zone", "") or "center" in d.get("zone", "")) and
+            (d.get("visual_distance") is not None and d.get("visual_distance") < 1.0)
+            for d in detections
+        )
+        is_emergency = has_approaching or sonar_prox or visual_prox
+
+        if is_emergency:
+            announcement = format_spatial_announcement(detections, distance_meters=distance_meters)
+            current_sig = self._make_sig(detections, emergency=True)
+            if current_sig != self.last_spoken_sig or (now - self.last_spoken_time >= 2.5):
+                self.last_spoken_time = now
+                self.last_spoken_sig = current_sig
+                self.last_spoken_text = announcement
+                self.candidate_sig = None
+                self.clear_start_time = None
+                if has_approaching:
+                    reason = "Approaching Hazard Alert"
+                elif sonar_prox:
+                    reason = f"Proximity Alert ({distance_meters:.2f}m)"
+                else:
+                    v_d = detections[0].get("visual_distance", 0.9)
+                    reason = f"Visual Proximity Alert ({v_d:.1f}m)"
+                return True, announcement, reason
+            return False, None, None
+
+        # 3. Obstacles in view (Standard navigation)
+        if len(detections) > 0:
+            self.clear_start_time = None
+            current_sig = self._make_sig(detections)
+            
+            # Scenario A: Same scene as previously spoken
+            if current_sig == self.last_spoken_sig:
+                if now - self.last_spoken_time >= self.persistent_cooldown:
+                    announcement = format_spatial_announcement(detections, distance_meters=distance_meters)
+                    self.last_spoken_time = now
+                    self.last_spoken_text = announcement
+                    return True, announcement, "Periodic Obstacle Reminder"
+                return False, None, None
+            
+            # Scenario B: Scene has changed (new obstacle or direction change)
+            if current_sig != self.candidate_sig:
+                self.candidate_sig = current_sig
+                self.candidate_first_seen = now
+                self.candidate_text = format_spatial_announcement(detections, distance_meters=distance_meters)
+                return False, None, None
+            else:
+                # Candidate has been stable for change_debounce seconds
+                if now - self.candidate_first_seen >= self.change_debounce:
+                    self.last_spoken_time = now
+                    self.last_spoken_sig = current_sig
+                    self.last_spoken_text = self.candidate_text
+                    self.candidate_sig = None
+                    main_cls = detections[0]['class']
+                    main_dir = detections[0]['direction']
+                    return True, self.candidate_text, f"Scene State Change ({main_cls} {main_dir})"
+                return False, None, None
+
+        # 4. Path is clear (len(detections) == 0 and distance >= 1.0m)
+        self.candidate_sig = None
+        if self.last_spoken_sig is not None and self.last_spoken_sig != () and self.last_spoken_sig != (False,):
+            # Path was previously blocked! Wait for clear_delay to avoid flutter
+            if self.clear_start_time is None:
+                self.clear_start_time = now
+                return False, None, None
+            elif now - self.clear_start_time >= self.clear_delay:
+                clear_msg = "Path clear ahead. Continue straight."
+                self.last_spoken_time = now
+                self.last_spoken_sig = ()
+                self.last_spoken_text = clear_msg
+                self.clear_start_time = None
+                return True, clear_msg, "Clear Path Confirmed"
+        
+        return False, None, None
+
+
+# ==========================================
+# 5. MAIN APPLICATION
 # ==========================================
 def main():
     parser = argparse.ArgumentParser(description="Raspberry Pi 5 CPU YOLOv8 Smart Vision Assistant")
@@ -347,10 +681,16 @@ def main():
     parser.add_argument("--trigger-pin", type=int, default=23, help="HC-SR04 trigger GPIO pin (default: 23)")
     parser.add_argument("--echo-pin", type=int, default=24, help="HC-SR04 echo GPIO pin (default: 24)")
     parser.add_argument("--button-pin", type=int, default=17, help="Tactile push button GPIO pin (default: 17)")
+    parser.add_argument("--no-sonar", action="store_true", help="Disable ultrasonic sensor for pure high-speed camera mode")
     args = parser.parse_args()
 
-    # Initialize GPIO Sensors with configured pins
-    init_sensors(trigger_pin=args.trigger_pin, echo_pin=args.echo_pin, button_pin=args.button_pin)
+    # Initialize GPIO Sensors with configured pins (or skip sonar if --no-sonar)
+    init_sensors(
+        trigger_pin=args.trigger_pin,
+        echo_pin=args.echo_pin,
+        button_pin=args.button_pin,
+        enable_sonar=(not args.no_sonar)
+    )
 
     # Auto-detect assistive 92 model if not specified (script-relative path)
     default_model_path = os.path.join(BASE_DIR, "model_files", "yolov8_assistive_92.onnx")
@@ -421,12 +761,11 @@ def main():
     startup_msg = "Smart vision assistant ready. Obstacle radar active."
     speak(startup_msg)
 
-    last_scan_time = time.time()
+    alert_manager = AssistiveAlertManager(persistent_cooldown=25.0, change_debounce=1.2, clear_delay=2.0)
     last_button_time = 0.0
     last_valid_frame_time = time.time()
     camera_lost_alerted = False
     current_announcement = startup_msg
-    COOLDOWN = 3.0  # Cooldown between voice alerts
     frame_count = 0
     fps_start_time = time.time()
     current_fps = 0.0
@@ -465,46 +804,31 @@ def main():
                 button_pressed = True
                 last_button_time = time.time()
 
-            # Run YOLOv8 detection on CPU with multi-frame approach tracking
-            detections = detector.detect(frame, distance_meters=distance_meters)
+            # Run YOLOv8 detection on CPU with multi-frame approach tracking and temporal confirmation
+            detections = detector.detect(frame, distance_meters=distance_meters, filter_unconfirmed=True)
 
-            # Trigger condition: Obstacle detected in camera view OR distance < 1.0m OR Button pressed
-            has_obstacle = (len(detections) > 0) or (distance_meters < 1.0)
-            has_approaching = any(d.get("is_approaching", False) for d in detections)
-            is_emergency = has_approaching or (distance_meters < 1.0)
-            time_since_last_alert = time.time() - last_scan_time
-
-            # Format announcement: tactile button triggers comprehensive on-demand scan
-            candidate_announcement = format_spatial_announcement(
-                detections,
-                distance_meters=distance_meters,
-                is_full_scan=button_pressed
-            )
-            state_changed = (candidate_announcement != current_announcement)
-
-            # Fast response for blind safety:
-            # - Instant alert on button press or emergency (approaching hazard / <1.0m)
-            # - Fast 1.2s debouncing on normal navigation state changes
-            # - Periodic reminder cooldown if obstacle persists
-            should_alert = button_pressed or (state_changed and (is_emergency or time_since_last_alert > 1.2)) or (has_obstacle and time_since_last_alert > COOLDOWN)
-
-            if should_alert:
-                current_announcement = candidate_announcement
-                if button_pressed:
-                    trigger_reason = "Tactile Button Pressed (Full Surroundings Scan)"
-                elif has_approaching:
-                    app_names = [d["class"] for d in detections if d.get("is_approaching")]
-                    trigger_reason = f"Approaching Hazard: {', '.join(app_names)}"
-                elif len(detections) > 0:
-                    trigger_reason = f"Obstacle Alert ({detections[0]['class']} in view)"
-                elif distance_meters < 1.0:
-                    trigger_reason = f"Proximity Alert ({distance_meters:.2f}m)"
+            # Live Terminal Scanning Feedback every 1.5 seconds so user always sees camera is alive
+            if not hasattr(main, '_last_print_time'):
+                main._last_print_time = 0.0
+            if time.time() - main._last_print_time > 1.5:
+                if detections:
+                    det_summary = ", ".join([f"{d['class']} ({d['confidence']*100:.0f}%)" for d in detections])
+                    print(f"[LIVE SCAN] FPS: {current_fps:.1f} | Detections: [{det_summary}]")
                 else:
-                    trigger_reason = "Clear Path Navigation Update"
+                    print(f"[LIVE SCAN] FPS: {current_fps:.1f} | Scanning... Path clear ahead")
+                main._last_print_time = time.time()
 
+            # Evaluate assistive alert state (anti-repetition, stateful debouncing & clear path confirmation)
+            should_speak, announcement, trigger_reason = alert_manager.evaluate(
+                detections=detections,
+                distance_meters=distance_meters,
+                button_pressed=button_pressed
+            )
+
+            if should_speak and announcement:
+                current_announcement = announcement
                 print(f"\n[TRIGGER] {trigger_reason} -> \"{current_announcement}\"")
                 speak(current_announcement)
-                last_scan_time = time.time()
 
             # Graphical Telemetry Display
             if not headless_mode:
