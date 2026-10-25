@@ -31,8 +31,8 @@ The **Smart Vision Assistant** physical prototype is a compact, chest-mounted as
 ## 2. Interactive Presentation Board
 
 We have compiled the full infographic poster matching your reference into an interactive digital showcase:
-- **Interactive File:** [`prototype_showcase.html`](file:///d:/Projects/SSIT/AI%20hat/prototype_showcase.html)
-- **1-Click Windows Launcher:** [`run_prototype_showcase.bat`](file:///d:/Projects/SSIT/AI%20hat/run_prototype_showcase.bat)
+- **Interactive File:** [`prototype_showcase.html`](file:///d:/projects/objrct%20detection/object-detection/prototype_showcase.html)
+- **1-Click Windows Launcher:** [`run_prototype_showcase.bat`](file:///d:/projects/objrct%20detection/object-detection/run_prototype_showcase.bat)
 
 ### Poster Sections Included:
 1. **Model Image (Physical Prototype):** High-resolution studio product photography with interactive callout pins pointing to Camera Module 3, Ultrasonic Sensor, Push Button, Raspberry Pi 5, Power Bank, and Earphones.

@@ -39,36 +39,47 @@ class NumpyEncoder(json.JSONEncoder):
             return obj.tolist()
         return super().default(obj)
 
-# Initialize Windows SAPI Voice Synthesizer
+# Initialize Thread-Safe Voice Synthesizer
 class VoiceSynthesizer:
     def __init__(self):
         self.lock = threading.Lock()
-        self._sapi = None
-        try:
-            import win32com.client
-            self._sapi = win32com.client.Dispatch("SAPI.SpVoice")
-        except Exception:
-            self._sapi = None
 
     def speak(self, text):
         threading.Thread(target=self._speak_worker, args=(text,), daemon=True).start()
 
     def _speak_worker(self, text):
         clean_text = text.replace('"', '').replace("'", "")
-        with self.lock:
-            if self._sapi:
-                try:
-                    self._sapi.Speak(clean_text)
-                    return
-                except Exception:
-                    pass
+        if sys.platform == "win32":
+            try:
+                import pythoncom
+                pythoncom.CoInitialize()
+                import win32com.client
+                # SVSFlagsAsync (1) + SVSFPurgeBeforeSpeak (2)
+                v = win32com.client.Dispatch("SAPI.SpVoice")
+                v.Speak(clean_text, 1 | 2)
+                return
+            except Exception:
+                pass
             try:
                 import subprocess
                 ps_cmd = f'[System.Reflection.Assembly]::LoadWithPartialName("System.Speech"); $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; $s.Speak("{clean_text}");'
                 subprocess.run(["powershell", "-NoProfile", "-Command", ps_cmd],
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return
             except Exception as e:
                 print(f"[VOICE ERROR] {e}")
+        elif sys.platform == "darwin":
+            try:
+                import subprocess
+                subprocess.run(["say", clean_text], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+        else:
+            try:
+                import subprocess
+                subprocess.run(["espeak", "-ven+f3", "-s160", clean_text], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
 
 voice = VoiceSynthesizer()
 
@@ -79,10 +90,10 @@ class SimulationState:
         self.distance = 1.80
         self.auto_walk = False
         self.walk_dir = -1
-        self.last_scan_time = 0.0
-        self.last_spoken_announcement = ""
-        self.cooldown = 4.0
+        self.last_scan_time = time.time()
         self.current_announcement = "Simulation Ready. 9-Part Spatial Detection Active."
+        self.last_spoken_announcement = self.current_announcement
+        self.cooldown = 4.0
         self.current_detections = []
         self.fps = 30.0
         self.latest_jpeg = None
@@ -174,10 +185,12 @@ def camera_yolo_loop():
             col = "left" if cx < 640 / 3.0 else ("right" if cx > 1280 / 3.0 else "middle")
             row = "top" if cy < 480 / 3.0 else ("bottom" if cy > 960 / 3.0 else "middle")
             z = "middle-center" if (row == "middle" and col == "middle") else f"{row}-{col}"
+            sim_dir = "directly ahead" if z == "middle-center" else f"{row} {col}"
             sim_det = [{
                 "class": "person",
                 "confidence": 0.93,
                 "box": [ox, oy, ox + ow, oy + oh],
+                "direction": sim_dir,
                 "zone": z,
                 "row": row,
                 "col": col,

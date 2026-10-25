@@ -112,15 +112,18 @@ def letterbox(im, new_shape=(320, 320), color=(114, 114, 114)):
     """
     Standard letterbox resizing with aspect ratio preservation and padding.
     Maintains true object proportions (prevents squashing upright humans into squat quadrupeds).
+    new_shape: (width, height) or int
     """
-    shape = im.shape[:2]  # [height, width]
+    im_h, im_w = im.shape[:2]
     if isinstance(new_shape, int):
         new_shape = (new_shape, new_shape)
-    r = min(new_shape[0] / shape[0], new_shape[1] / shape[1])
-    new_unpad = int(round(shape[1] * r)), int(round(shape[0] * r))
-    dw, dh = (new_shape[1] - new_unpad[0]) / 2.0, (new_shape[0] - new_unpad[1]) / 2.0
-    if shape[::-1] != new_unpad:
-        im = cv2.resize(im, new_unpad, interpolation=cv2.INTER_LINEAR)
+    target_w, target_h = new_shape
+    r = min(target_w / im_w, target_h / im_h)
+    new_unpad_w, new_unpad_h = int(round(im_w * r)), int(round(im_h * r))
+    dw = (target_w - new_unpad_w) / 2.0
+    dh = (target_h - new_unpad_h) / 2.0
+    if (im_w, im_h) != (new_unpad_w, new_unpad_h):
+        im = cv2.resize(im, (new_unpad_w, new_unpad_h), interpolation=cv2.INTER_LINEAR)
     top, bottom = int(round(dh - 0.1)), int(round(dh + 0.1))
     left, right = int(round(dw - 0.1)), int(round(dw + 0.1))
     im = cv2.copyMakeBorder(im, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)

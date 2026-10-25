@@ -63,7 +63,8 @@ names:
     )
 
     # 3. Export to CPU-optimized ONNX format for Raspberry Pi
-    output_dir = "model_files"
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    output_dir = os.path.join(base_dir, "model_files")
     os.makedirs(output_dir, exist_ok=True)
     custom_onnx_target = os.path.join(output_dir, "yolov8_custom.onnx")
 

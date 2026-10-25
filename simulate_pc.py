@@ -109,7 +109,7 @@ class VoiceSynthesizer:
         # macOS native say command
         elif sys.platform == "darwin":
             try:
-                subprocess.run(["say", text], capture_output=True, timeout=5)
+                subprocess.run(["say", clean_text], capture_output=True, timeout=5)
                 return
             except Exception:
                 pass
@@ -117,7 +117,7 @@ class VoiceSynthesizer:
         # Linux espeak command
         else:
             try:
-                subprocess.run(["espeak", "-ven+f3", "-s155", text], capture_output=True, timeout=5)
+                subprocess.run(["espeak", "-ven+f3", "-s155", clean_text], capture_output=True, timeout=5)
                 return
             except Exception:
                 pass
@@ -514,10 +514,12 @@ def main():
                 row = "top" if sim_center_y < 160 else ("bottom" if sim_center_y > 320 else "middle")
                 sim_zone = f"{row}-{col}" if (row != "middle" or col != "middle") else "middle-center"
 
+                sim_dir = "directly ahead" if sim_zone == "middle-center" else f"{row} {col}"
                 sim_det = [{
                     "class": "person",
                     "confidence": 0.92,
                     "box": [ox, oy, ox + ow, oy + oh],
+                    "direction": sim_dir,
                     "zone": sim_zone,
                     "center": (sim_center_x, sim_center_y),
                     "center_x": sim_center_x,

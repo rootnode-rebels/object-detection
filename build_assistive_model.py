@@ -11,15 +11,16 @@ import os
 import sys
 import argparse
 
-CLASSES_FILE = "classes.txt"
-OUTPUT_DIR = "model_files"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CLASSES_FILE = os.path.join(BASE_DIR, "classes.txt")
+OUTPUT_DIR = os.path.join(BASE_DIR, "model_files")
 
 
 def load_classes(file_path=CLASSES_FILE):
     if not os.path.exists(file_path):
         print(f"[ERROR] Classes file '{file_path}' not found.")
         sys.exit(1)
-    with open(file_path, "r") as f:
+    with open(file_path, "r", encoding="utf-8") as f:
         classes = [line.strip() for line in f if line.strip()]
     return classes
 

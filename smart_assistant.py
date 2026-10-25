@@ -73,20 +73,20 @@ def _sonar_worker():
                 warnings.simplefilter("always")
                 d = sensor.distance
                 has_no_echo = any("no echo" in str(item.message).lower() for item in w)
-                if has_no_echo or d is None:
-                    consecutive_errors += 1
+                if has_no_echo or d is None or d >= 3.0:
+                    # Normal out-of-range (>3m) or clear open space
+                    sonar_reading = 3.0
+                    consecutive_errors = 0
                 else:
                     consecutive_errors = 0
                     if 0.0 <= d <= 3.0:
                         sonar_reading = d
 
-            if consecutive_errors >= 4:
-                print("[WARN] Ultrasonic echo signal lost. Auto-switching to pure high-speed camera mode.")
-                sonar_disabled = True
-                break
         except Exception:
+            # Only count actual hardware exceptions / disconnects
             consecutive_errors += 1
-            if consecutive_errors >= 4:
+            if consecutive_errors >= 15:
+                print("[WARN] Ultrasonic hardware communication error. Switching to pure camera mode.")
                 sonar_disabled = True
                 break
         time.sleep(0.08)  # Sample at ~12 Hz asynchronously
@@ -126,7 +126,7 @@ def init_sensors(trigger_pin=23, echo_pin=24, button_pin=17, enable_sonar=True):
                 warnings.simplefilter("always")
                 probe = candidate_sensor.distance
                 has_no_echo = any("no echo" in str(item.message).lower() for item in w)
-                if has_no_echo or probe is None:
+                if probe is None:
                     print("[INFO] Ultrasonic ECHO pin not detected (hardware desoldered / unplugged).")
                     print("[INFO] Auto-engaging pure high-speed vision mode. Push button active on GPIO 17.")
                     candidate_sensor.close()
@@ -135,11 +135,12 @@ def init_sensors(trigger_pin=23, echo_pin=24, button_pin=17, enable_sonar=True):
                 else:
                     sensor = candidate_sensor
                     sonar_disabled = False
-                    sonar_reading = probe
+                    sonar_reading = 3.0 if has_no_echo else probe
                     sonar_thread_running = True
                     sonar_thread = threading.Thread(target=_sonar_worker, daemon=True)
                     sonar_thread.start()
-                    print(f"[INFO] Ultrasonic hardware healthy! Live echo verified: {probe:.2f}m. Multi-modal radar ACTIVE.")
+                    probe_str = "Clear (>3.0m)" if has_no_echo else f"{probe:.2f}m"
+                    print(f"[INFO] Ultrasonic hardware healthy! Live echo: {probe_str}. Multi-modal radar ACTIVE.")
         except Exception as e:
             print(f"[INFO] Ultrasonic radar offline ({e}). Running vision-only mode.")
             sensor = None
@@ -285,7 +286,11 @@ def speak(text):
     # Launch new speech without shell=True for strict command-injection prevention
     for engine in ['espeak-ng', 'espeak']:
         try:
-            tts_process = subprocess.Popen([engine, '-ven+f3', '-s160', '-p50', clean_text])
+            tts_process = subprocess.Popen(
+                [engine, '-ven+f3', '-s160', '-p50', clean_text],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
             return
         except FileNotFoundError:
             continue
@@ -295,7 +300,11 @@ def speak(text):
 
     if sys.platform == "darwin":
         try:
-            tts_process = subprocess.Popen(["say", clean_text])
+            tts_process = subprocess.Popen(
+                ["say", clean_text],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
             return
         except Exception:
             pass
@@ -643,7 +652,7 @@ class AssistiveAlertManager:
                     self.last_spoken_text = self.candidate_text
                     self.candidate_sig = None
                     main_cls = detections[0]['class']
-                    main_dir = detections[0]['direction']
+                    main_dir = detections[0].get('direction', 'ahead')
                     return True, self.candidate_text, f"Scene State Change ({main_cls} {main_dir})"
                 return False, None, None
 
