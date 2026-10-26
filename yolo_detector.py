@@ -329,7 +329,7 @@ class ApproachTracker:
 
                 det["track_id"] = best_tid
                 det["hits"] = trk["hits"]
-                det["is_confirmed"] = (trk["hits"] >= 2) or is_approaching or (distance_meters is not None and 0.0 < distance_meters < 1.0)
+                det["is_confirmed"] = True
                 det["is_approaching"] = is_approaching
                 det["approach_speed"] = approach_speed
                 det["growth_rate"] = growth_rate
@@ -353,7 +353,7 @@ class ApproachTracker:
                 }
                 det["track_id"] = tid
                 det["hits"] = 1
-                det["is_confirmed"] = (distance_meters is not None and 0.0 < distance_meters < 1.0)
+                det["is_confirmed"] = True
                 det["is_approaching"] = False
                 det["approach_speed"] = None
                 det["growth_rate"] = 0.0
@@ -632,13 +632,14 @@ class YOLODetector:
 def format_spatial_announcement(detections, distance_meters=None, target_zone=None, is_full_scan=False):
     """
     Constructs actionable, life-critical spatial voice guidance specifically for blind individuals.
+    Naturally states exact object names on left, right, and ahead (e.g. 'There is a chair on your left').
     
     Priority Hierarchy:
     1. Approaching Hazards (names specific object approaching towards the user, e.g. car, person, dog, bicycle).
     2. Ground Hazards (tripping/falling risks directly ahead: staircase, pothole, curb, drain, rocks).
     3. Overhead Hazards (head collision risks directly ahead: tree branch, low signs).
-    4. Immediate Proximity Obstacles (< 1.0m ahead: "Stop! {object} directly in front of you at X meters").
-    5. Path Navigation Obstacles (what is ahead, left, and right with clear evasion directions).
+    4. Immediate Proximity Obstacles (< 1.0m ahead: "Stop! There is {object} directly in front of you").
+    5. Path Navigation Obstacles (what is ahead, left, and right with specific object names).
     6. All Clear ("Path clear ahead. Continue straight.").
     """
     zones = {
@@ -677,13 +678,70 @@ def format_spatial_announcement(detections, distance_meters=None, target_zone=No
             return f" at {distance_meters:.1f} meters"
         return ""
 
-    dist_str = _get_item_dist_str(zones["middle-center"], is_center=True)
+    # Natural English item formatter (handles articles 'a', 'an', plurals)
+    def _format_item_names(items, max_count=2):
+        if not items:
+            return ""
+        parts = []
+        seen = set()
+        for it in items:
+            name = it["class"].strip()
+            if name in seen:
+                continue
+            seen.add(name)
+            if name.endswith("s") and name.lower() not in ["bus", "glass"]:
+                parts.append(name)
+            elif name[0].lower() in "aeiou":
+                parts.append(f"an {name}")
+            else:
+                parts.append(f"a {name}")
+            if len(parts) >= max_count:
+                break
+        if not parts:
+            return ""
+        if len(parts) == 1:
+            return parts[0]
+        return f"{parts[0]} and {parts[1]}"
+
+    # Group items by horizontal column (aggregating across ground, middle, and overhead levels)
+    # This prevents objects on the floor (like chairs, shoes, backpacks) from being omitted!
+    left_items = []
+    seen_left = set()
+    for z_key in ["middle-left", "bottom-left", "top-left"]:
+        for it in zones[z_key]:
+            if it["class"] not in seen_left:
+                seen_left.add(it["class"])
+                left_items.append(it)
+
+    right_items = []
+    seen_right = set()
+    for z_key in ["middle-right", "bottom-right", "top-right"]:
+        for it in zones[z_key]:
+            if it["class"] not in seen_right:
+                seen_right.add(it["class"])
+                right_items.append(it)
+
+    center_items = []
+    seen_center = set()
+    for z_key in ["middle-center", "bottom-middle", "top-middle"]:
+        for it in zones[z_key]:
+            if it["class"] not in seen_center:
+                seen_center.add(it["class"])
+                center_items.append(it)
+
+    l_name = _format_item_names(left_items)
+    r_name = _format_item_names(right_items)
+    m_name = _format_item_names(center_items)
+
+    dist_str = _get_item_dist_str(center_items, is_center=True)
+    l_dist_str = _get_item_dist_str(left_items)
+    r_dist_str = _get_item_dist_str(right_items)
+
     visual_proximity = any(
         (it.get("visual_distance") is not None and it["visual_distance"] < 1.1)
-        for it in zones["middle-center"]
+        for it in center_items
     )
     middle_proximity = (distance_meters is not None and 0.0 < distance_meters < 1.0) or visual_proximity
-    has_mid = bool(zones["middle-center"]) or middle_proximity
     has_low_ahead = bool(zones["bottom-middle"])
     has_overhead = bool(zones["top-middle"])
 
@@ -694,38 +752,35 @@ def format_spatial_announcement(detections, distance_meters=None, target_zone=No
         scan_parts = []
         if approaching_objects:
             app_n = approaching_objects[0]["class"]
-            scan_parts.append(f"Caution, {app_n} is approaching towards you")
-        if zones["middle-center"]:
-            mc_names = " and ".join([it["class"] for it in zones["middle-center"][:2]])
-            scan_parts.append(f"{mc_names} directly in front of you{dist_str}")
+            app_art = "an" if app_n[0].lower() in "aeiou" else "a"
+            scan_parts.append(f"Caution, {app_art} {app_n} is approaching towards you")
+        if center_items:
+            scan_parts.append(f"{m_name} directly in front of you{dist_str}")
         elif middle_proximity:
-            scan_parts.append(f"obstacle directly in front of you{dist_str}")
+            scan_parts.append(f"an obstacle directly in front of you{dist_str}")
 
-        if zones["middle-left"]:
-            ml_names = " and ".join([it["class"] for it in zones["middle-left"][:2]])
-            scan_parts.append(f"{ml_names} on your left{_get_item_dist_str(zones['middle-left'])}")
-        if zones["middle-right"]:
-            mr_names = " and ".join([it["class"] for it in zones["middle-right"][:2]])
-            scan_parts.append(f"{mr_names} on your right{_get_item_dist_str(zones['middle-right'])}")
+        if left_items:
+            scan_parts.append(f"{l_name} on your left{l_dist_str}")
+        if right_items:
+            scan_parts.append(f"{r_name} on your right{r_dist_str}")
 
-        if zones["bottom-middle"]:
-            bm_names = " and ".join([it["class"] for it in zones["bottom-middle"][:2]])
-            scan_parts.append(f"low {bm_names} on the ground ahead{_get_item_dist_str(zones['bottom-middle'])}")
-        if zones["top-middle"]:
-            tm_names = " and ".join([it["class"] for it in zones["top-middle"][:2]])
-            scan_parts.append(f"overhead {tm_names} ahead{_get_item_dist_str(zones['top-middle'])}")
+        if zones["bottom-middle"] and not any(it in center_items for it in zones["bottom-middle"]):
+            bm_names = _format_item_names(zones["bottom-middle"])
+            scan_parts.append(f"low {bm_names} on the ground ahead")
+        if zones["top-middle"] and not any(it in center_items for it in zones["top-middle"]):
+            tm_names = _format_item_names(zones["top-middle"])
+            scan_parts.append(f"overhead {tm_names} ahead")
 
         if scan_parts:
-            # Action suggestion
-            if not zones["middle-right"]:
+            if not right_items:
                 action = "Path is clear on the right."
-            elif not zones["middle-left"]:
+            elif not left_items:
                 action = "Path is clear on the left."
-            elif not zones["middle-center"] and not middle_proximity:
+            elif not center_items and not middle_proximity:
                 action = "Center path is clear to walk."
             else:
                 action = "Path blocked, please step aside."
-            return f"Surroundings scan: {', '.join(scan_parts)}. {action}"
+            return f"Surroundings scan: There is {', '.join(scan_parts)}. {action}"
         else:
             return "Surroundings scan: Path is completely clear ahead. Safe to walk straight."
 
@@ -734,59 +789,46 @@ def format_spatial_announcement(detections, distance_meters=None, target_zone=No
     # =========================================================
     if target_zone:
         tz = target_zone.lower()
-        if tz in ["middle", "ahead", "center", "infront"]: tz = "middle-center"
-        elif tz in ["left"]: tz = "middle-left"
-        elif tz in ["right"]: tz = "middle-right"
-        elif tz in ["top", "overhead"]: tz = "top-middle"
-        elif tz in ["bottom", "ground", "low"]: tz = "bottom-middle"
-
-        items = zones.get(tz, [])
-        names = " and ".join([it["class"] for it in items[:2]]) if items else None
-
-        zone_labels = {
-            "top-left": "Top-left overhead",
-            "top-middle": "Overhead directly ahead",
-            "top-right": "Top-right overhead",
-            "middle-left": "On your left",
-            "middle-center": "Directly in front of you",
-            "middle-right": "On your right",
-            "bottom-left": "On the ground to your left",
-            "bottom-middle": "On the ground directly ahead",
-            "bottom-right": "On the ground to your right"
-        }
-        z_label = zone_labels.get(tz, tz)
-
-        if not names:
-            if tz == "middle-center" and middle_proximity:
-                return f"Obstacle directly in front of you{dist_str}. Step aside to the left or right."
-            return f"{z_label} is clear."
-
-        # Check if item in target zone is approaching
-        target_approaching = any(it.get("is_approaching", False) for it in items)
-        if target_approaching:
-            if tz == "middle-center":
-                return f"Caution, {names} is approaching towards you directly ahead{dist_str}."
-            elif "left" in tz:
-                return f"Caution, {names} is approaching on your left."
-            elif "right" in tz:
-                return f"Caution, {names} is approaching on your right."
-
-        if tz == "bottom-middle":
-            return f"Ground hazard directly ahead: {names}{dist_str}. Watch your step."
-        elif tz == "top-middle":
-            return f"Overhead obstacle directly ahead: {names}. Watch your head."
-        elif tz == "middle-center":
-            return f"{names.capitalize()} directly in front of you{dist_str}. Step aside to the left or right."
-        elif "left" in tz:
-            return f"{names.capitalize()} on your left. Safe to go straight or right."
+        if tz in ["middle", "ahead", "center", "infront"]:
+            tz_items = center_items
+            tz_name = m_name
+            z_loc = "directly in front of you"
+        elif tz in ["left"]:
+            tz_items = left_items
+            tz_name = l_name
+            z_loc = "on your left"
+        elif tz in ["right"]:
+            tz_items = right_items
+            tz_name = r_name
+            z_loc = "on your right"
+        elif tz in ["top", "overhead"]:
+            tz_items = zones.get("top-middle", [])
+            tz_name = _format_item_names(tz_items)
+            z_loc = "overhead directly ahead"
+        elif tz in ["bottom", "ground", "low"]:
+            tz_items = zones.get("bottom-middle", [])
+            tz_name = _format_item_names(tz_items)
+            z_loc = "on the ground directly ahead"
         else:
-            return f"{names.capitalize()} on your right. Safe to go straight or left."
+            tz_items = []
+            tz_name = ""
+            z_loc = tz
+
+        if not tz_name:
+            if tz in ["middle", "ahead", "center", "infront"] and middle_proximity:
+                return f"There is an obstacle directly in front of you{dist_str}. Step aside to the left or right."
+            return f"{z_loc.capitalize()} is clear."
+
+        target_approaching = any(it.get("is_approaching", False) for it in tz_items)
+        if target_approaching:
+            return f"Caution, {tz_name} is approaching towards you {z_loc}."
+
+        return f"There is {tz_name} {z_loc}."
 
     # =========================================================
     # 2. PRIORITY 1: APPROACHING OBJECTS (Life-Critical for Blind Person)
     # =========================================================
     if approaching_objects:
-        # Sort approaching objects: center objects and vehicles first
         def _approach_priority(d):
             score = 0
             if d["class"] in VEHICLE_APPROACH_CLASSES:
@@ -799,9 +841,10 @@ def format_spatial_announcement(detections, distance_meters=None, target_zone=No
 
         approaching_objects.sort(key=_approach_priority, reverse=True)
         top_app = approaching_objects[0]
-        app_name = top_app["class"]
+        app_raw = top_app["class"]
+        app_name = f"an {app_raw}" if app_raw[0].lower() in "aeiou" else f"a {app_raw}"
         app_zone = top_app.get("zone", "middle-center")
-        is_fast = (top_app.get("approach_speed") == "fast") or (app_name in VEHICLE_APPROACH_CLASSES)
+        is_fast = (top_app.get("approach_speed") == "fast") or (app_raw in VEHICLE_APPROACH_CLASSES)
         app_dist_str = _get_item_dist_str([top_app], is_center=("middle" in app_zone and "center" in app_zone))
 
         if "middle" in app_zone and "center" in app_zone:
@@ -822,68 +865,60 @@ def format_spatial_announcement(detections, distance_meters=None, target_zone=No
     # 3. PRIORITY 2: GROUND HAZARDS (Fall / Trip Risks: Stairs, Potholes, Manholes)
     # =========================================================
     if has_low_ahead:
-        low_names = " and ".join([it["class"] for it in zones["bottom-middle"][:2]])
-        return f"Warning, ground hazard in front of you: {low_names}{dist_str}. Watch your step."
+        low_names = _format_item_names(zones["bottom-middle"])
+        return f"Warning, ground hazard in front of you: there is {low_names}{dist_str}. Watch your step."
 
-    # Also check if any center detection is explicitly a ground hazard class (e.g. staircase, pothole)
-    center_ground_hazards = [it["class"] for it in zones["middle-center"] if it["class"] in GROUND_HAZARD_CLASSES]
+    center_ground_hazards = [it for it in center_items if it["class"] in GROUND_HAZARD_CLASSES]
     if center_ground_hazards:
-        gh_name = " and ".join(center_ground_hazards[:2])
-        return f"Warning, {gh_name} directly in front of you on the ground{dist_str}. Watch your step."
+        gh_name = _format_item_names(center_ground_hazards)
+        return f"Warning, there is {gh_name} directly in front of you on the ground{dist_str}. Watch your step."
 
     # =========================================================
     # 4. PRIORITY 3: OVERHEAD HAZARDS (Head Bump Risks: Tree Branches, Signs)
     # =========================================================
     if has_overhead:
-        top_names = " and ".join([it["class"] for it in zones["top-middle"][:2]])
-        return f"Warning, overhead obstacle directly ahead: {top_names}. Watch your head."
+        top_names = _format_item_names(zones["top-middle"])
+        return f"Warning, overhead obstacle directly ahead: there is {top_names}. Watch your head."
 
     # =========================================================
     # 5. PRIORITY 4: IMMEDIATE PROXIMITY HAZARD (< 1.0 Meter in Front)
     # =========================================================
-    m_name = (" and ".join([it["class"] for it in zones["middle-center"][:2]])) if zones["middle-center"] else None
-    l_name = (" and ".join([it["class"] for it in zones["middle-left"][:2]])) if zones["middle-left"] else None
-    r_name = (" and ".join([it["class"] for it in zones["middle-right"][:2]])) if zones["middle-right"] else None
-
-    # Fallback to general obstacle if ultrasonic triggered without YOLO label
-    front_label = m_name if m_name else ("obstacle" if middle_proximity else None)
+    front_label = m_name if m_name else ("an obstacle" if middle_proximity else None)
 
     if middle_proximity and front_label:
+        fl_cap = front_label[0].upper() + front_label[1:]
         if not l_name and r_name:
-            return f"Stop! {front_label.capitalize()} directly in front of you{dist_str}. Step aside to the left."
+            return f"Stop! There is {front_label} directly in front of you{dist_str}. Step aside to the left."
         elif not r_name and l_name:
-            return f"Stop! {front_label.capitalize()} directly in front of you{dist_str}. Step aside to the right."
+            return f"Stop! There is {front_label} directly in front of you{dist_str}. Step aside to the right."
         elif not l_name and not r_name:
-            return f"Stop! {front_label.capitalize()} directly in front of you{dist_str}. Step aside to the left or right."
+            return f"Stop! There is {front_label} directly in front of you{dist_str}. Step aside to the left or right."
         else:
-            return f"Stop! {front_label.capitalize()} directly in front of you{dist_str}. Path blocked, please stop."
+            return f"Stop! There is {front_label} directly in front of you{dist_str}. Path blocked, please stop."
 
     # =========================================================
     # 6. PRIORITY 5: PATH NAVIGATION (Obstacles at Standard Distance)
     # =========================================================
     has_left = bool(l_name)
     has_right = bool(r_name)
-    has_front = bool(front_label)
-
-    l_dist_str = _get_item_dist_str(zones["middle-left"])
-    r_dist_str = _get_item_dist_str(zones["middle-right"])
+    has_front = bool(m_name)
 
     if not has_front and not has_left and not has_right:
         return "Path clear ahead. Continue straight."
     elif has_left and not has_front and not has_right:
-        return f"Obstacle on your left: {l_name}{l_dist_str}. Path ahead is clear, continue straight."
+        return f"There is {l_name} on your left{l_dist_str}. Path ahead is clear, continue straight."
     elif has_right and not has_front and not has_left:
-        return f"Obstacle on your right: {r_name}{r_dist_str}. Path ahead is clear, continue straight."
+        return f"There is {r_name} on your right{r_dist_str}. Path ahead is clear, continue straight."
     elif has_front and not has_left and not has_right:
-        return f"{front_label.capitalize()} directly in front of you{dist_str}. Safe to go right or left."
+        return f"There is {m_name} directly in front of you{dist_str}. Safe to go right or left."
     elif has_front and has_left and not has_right:
-        return f"{front_label.capitalize()} in front of you and {l_name} on the left{dist_str}. Safe to go right."
+        return f"There is {m_name} in front of you and {l_name} on your left{dist_str}. Safe to go right."
     elif has_front and has_right and not has_left:
-        return f"{front_label.capitalize()} in front of you and {r_name} on the right{dist_str}. Safe to go left."
+        return f"There is {m_name} in front of you and {r_name} on your right{dist_str}. Safe to go left."
     elif not has_front and has_left and has_right:
-        return f"Obstacles on left ({l_name}) and right ({r_name}). Center path is clear, continue straight."
+        return f"There is {l_name} on your left and {r_name} on your right. Center path is clear, continue straight."
     else:
-        return f"Obstacles detected ahead ({front_label}), left, and right. Path blocked, please stop."
+        return f"There is {m_name} ahead, {l_name} on your left, and {r_name} on your right. Path blocked, please stop."
 
 
 if __name__ == "__main__":

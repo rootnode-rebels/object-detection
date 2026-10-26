@@ -213,9 +213,23 @@ def get_memory_utilization():
 # 2. TEXT-TO-SPEECH (NON-BLOCKING)
 # ==========================================
 tts_process = None
+tts_lock = threading.Lock()
 
-def speak(text):
-    """Speaks text asynchronously using espeak-ng/espeak (Linux/Pi) or native OS speech without blocking."""
+def is_speaking():
+    """Checks whether speech output is currently playing."""
+    global tts_process
+    if tts_process is not None:
+        try:
+            return tts_process.poll() is None
+        except Exception:
+            return False
+    return False
+
+def speak(text, force=False):
+    """
+    Speaks text asynchronously using espeak-ng/espeak (Linux/Pi) or native OS speech without blocking.
+    Includes anti-overload protection: drops overlapping messages unless 'force' is True (e.g. tactile button or critical stop).
+    """
     global tts_process
     if not text:
         return
@@ -225,82 +239,94 @@ def speak(text):
     if not clean_text.strip():
         return
 
-    try:
-        print(f"[VOICE] SPEAKING: {clean_text}")
-    except Exception:
-        pass
+    with tts_lock:
+        if not force and is_speaking():
+            # Speech is already in progress - prevent audio buffer piling up and bursting
+            return
 
-    if sys.platform == "win32":
-        def _win_speak():
-            sanitized = clean_text.replace('"', '').replace("'", "")
-            try:
-                import pythoncom
-                pythoncom.CoInitialize()
-            except Exception:
-                pass
-
-            try:
-                import win32com.client
-                voice = win32com.client.Dispatch("SAPI.SpVoice")
-                voice.Speak(sanitized, 1 | 2)
-                return
-            except Exception:
-                pass
-
-            # Fallback
-            try:
-                import winsound
-                import win32com.client
-                import tempfile
-                temp_wav = os.path.join(tempfile.gettempdir(), "_temp_assistant_tts.wav")
-                voice = win32com.client.Dispatch("SAPI.SpVoice")
-                stream = win32com.client.Dispatch("SAPI.SpFileStream")
-                stream.Open(temp_wav, 3, False)
-                voice.AudioOutputStream = stream
-                voice.Speak(sanitized, 0)
-                stream.Close()
-                winsound.PlaySound(temp_wav, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_PURGE)
-                return
-            except Exception:
-                pass
-
-        threading.Thread(target=_win_speak, daemon=True).start()
-        return
-
-    # Linux / Raspberry Pi: Clean up prior process and reap zombies
-    if tts_process is not None:
         try:
-            if tts_process.poll() is None:
-                tts_process.terminate()
+            print(f"[VOICE] SPEAKING: {clean_text}")
+        except Exception:
+            pass
+
+        if sys.platform == "win32":
+            def _win_speak():
+                sanitized = clean_text.replace('"', '').replace("'", "")
                 try:
-                    tts_process.wait(timeout=0.15)
+                    import pythoncom
+                    pythoncom.CoInitialize()
                 except Exception:
                     pass
-            else:
-                # Reap finished child process to prevent zombie accumulation
-                tts_process.wait(timeout=0.05)
-        except Exception:
-            pass
 
-    # Launch new speech without shell=True for strict command-injection prevention
-    for engine in ['espeak-ng', 'espeak']:
-        try:
-            tts_process = subprocess.Popen([engine, '-ven+f3', '-s160', '-p50', clean_text])
+                try:
+                    import win32com.client
+                    voice = win32com.client.Dispatch("SAPI.SpVoice")
+                    voice.Speak(sanitized, 1 | 2)
+                    return
+                except Exception:
+                    pass
+
+                # Fallback
+                try:
+                    import winsound
+                    import win32com.client
+                    import tempfile
+                    temp_wav = os.path.join(tempfile.gettempdir(), "_temp_assistant_tts.wav")
+                    voice = win32com.client.Dispatch("SAPI.SpVoice")
+                    stream = win32com.client.Dispatch("SAPI.SpFileStream")
+                    stream.Open(temp_wav, 3, False)
+                    voice.AudioOutputStream = stream
+                    voice.Speak(sanitized, 0)
+                    stream.Close()
+                    winsound.PlaySound(temp_wav, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_PURGE)
+                    return
+                except Exception:
+                    pass
+
+            threading.Thread(target=_win_speak, daemon=True).start()
             return
-        except FileNotFoundError:
-            continue
-        except Exception as e:
-            print(f"[WARN] TTS engine '{engine}' error: {e}")
-            break
 
-    if sys.platform == "darwin":
-        try:
-            tts_process = subprocess.Popen(["say", clean_text])
-            return
-        except Exception:
-            pass
+        # Linux / Raspberry Pi: Clean up prior process safely
+        if tts_process is not None:
+            try:
+                if tts_process.poll() is None:
+                    tts_process.terminate()
+                    try:
+                        tts_process.wait(timeout=0.10)
+                    except Exception:
+                        tts_process.kill()
+                else:
+                    tts_process.wait(timeout=0.05)
+            except Exception:
+                pass
 
-    print("[WARN] Neither 'espeak-ng' nor 'espeak' is installed. Run: sudo apt install espeak-ng -y")
+        # Launch new speech with natural pacing (-s145 words/min for calm, clear output)
+        for engine in ['espeak-ng', 'espeak']:
+            try:
+                tts_process = subprocess.Popen(
+                    [engine, '-ven+f3', '-s145', '-p50', clean_text],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                return
+            except FileNotFoundError:
+                continue
+            except Exception as e:
+                print(f"[WARN] TTS engine '{engine}' error: {e}")
+                break
+
+        if sys.platform == "darwin":
+            try:
+                tts_process = subprocess.Popen(
+                    ["say", clean_text],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                return
+            except Exception:
+                pass
+
+        print("[WARN] Neither 'espeak-ng' nor 'espeak' is installed. Run: sudo apt install espeak-ng -y")
 
 def stop_tts():
     """Terminates active speech upon exit."""
@@ -551,14 +577,16 @@ class AssistiveAlertManager:
     Guarantees:
     1. Zero repeating loop spam (25-second cooldown on static/unchanged scene).
     2. Instant alert on tactile push button press (full surroundings scan).
-    3. Instant alert on emergency (approaching vehicle/hazard or <1.0m proximity).
-    4. Speaks true state changes (new obstacle or direction change) with 1.2s debouncing to prevent jitter.
-    5. Confirms clear path (requires 2.0s of continuous clear frames before announcing 'Path clear ahead', preventing flutter).
+    3. Prevents audio buffer overload: enforces minimum 3.0s pacing between standard announcements and 2.0s for proximity warnings.
+    4. Stable signatures (uses class and horizontal column instead of noisy micro-coordinates) so frame-to-frame jitter doesn't trigger speech bursts.
+    5. Checks is_speaking() to ensure the assistant never interrupts itself or talks over ongoing speech.
+    6. Confirms clear path (requires 2.0s of continuous clear frames before announcing 'Path clear ahead', preventing flutter).
     """
-    def __init__(self, persistent_cooldown=25.0, change_debounce=1.2, clear_delay=2.0):
+    def __init__(self, persistent_cooldown=25.0, change_debounce=1.2, clear_delay=2.0, min_speech_interval=3.2):
         self.persistent_cooldown = persistent_cooldown
         self.change_debounce = change_debounce
         self.clear_delay = clear_delay
+        self.min_speech_interval = min_speech_interval
         
         self.last_spoken_time = 0.0
         self.last_spoken_sig = None
@@ -571,12 +599,20 @@ class AssistiveAlertManager:
         self.clear_start_time = None
 
     def _make_sig(self, detections, emergency=False):
-        return tuple(sorted([(d["class"], d["zone"], d.get("is_approaching", False)) for d in detections])) + (emergency,)
+        # Stable semantic signature: object class and horizontal column ('left', 'middle', 'right').
+        # Using column instead of volatile 9-grid box coordinates prevents minor hand tremors or bounding box jitter
+        # from changing the signature every 100 milliseconds.
+        sig_items = []
+        for d in detections:
+            col = d.get("col", "middle")
+            sig_items.append((d["class"], col))
+        return tuple(sorted(sig_items)) + (emergency,)
 
     def evaluate(self, detections, distance_meters, button_pressed):
         now = time.time()
+        time_since_last_speak = now - self.last_spoken_time
         
-        # 1. Tactile Button Pressed -> Immediate full surroundings scan
+        # 1. Tactile Button Pressed -> Immediate full surroundings scan (always allowed)
         if button_pressed:
             announcement = format_spatial_announcement(detections, distance_meters=distance_meters, is_full_scan=True)
             self.last_spoken_time = now
@@ -586,20 +622,24 @@ class AssistiveAlertManager:
             self.clear_start_time = None
             return True, announcement, "Tactile Button Pressed (Full Surroundings Scan)"
 
-        # 2. Emergency Hazard: approaching hazard OR proximity < 1.0m (ultrasonic or visual depth)
+        # 2. Emergency Hazard: approaching hazard OR immediate proximity < 0.85m
         has_approaching = any(d.get("is_approaching", False) for d in detections)
-        sonar_prox = (distance_meters is not None and 0.0 < distance_meters < 1.0)
+        sonar_prox = (distance_meters is not None and 0.0 < distance_meters < 0.85)
         visual_prox = any(
             ("middle" in d.get("zone", "") or "center" in d.get("zone", "")) and
-            (d.get("visual_distance") is not None and d.get("visual_distance") < 1.0)
+            (d.get("visual_distance") is not None and d.get("visual_distance") < 0.85)
             for d in detections
         )
         is_emergency = has_approaching or sonar_prox or visual_prox
 
         if is_emergency:
-            announcement = format_spatial_announcement(detections, distance_meters=distance_meters)
+            # Enforce at least 2.0s refractory period even in emergency to prevent voice buffer piling and bursts
+            if time_since_last_speak < 2.0:
+                return False, None, None
+
             current_sig = self._make_sig(detections, emergency=True)
-            if current_sig != self.last_spoken_sig or (now - self.last_spoken_time >= 2.5):
+            if current_sig != self.last_spoken_sig or time_since_last_speak >= 3.0:
+                announcement = format_spatial_announcement(detections, distance_meters=distance_meters)
                 self.last_spoken_time = now
                 self.last_spoken_sig = current_sig
                 self.last_spoken_text = announcement
@@ -610,19 +650,24 @@ class AssistiveAlertManager:
                 elif sonar_prox:
                     reason = f"Proximity Alert ({distance_meters:.2f}m)"
                 else:
-                    v_d = detections[0].get("visual_distance", 0.9)
+                    v_d = detections[0].get("visual_distance", 0.8)
                     reason = f"Visual Proximity Alert ({v_d:.1f}m)"
                 return True, announcement, reason
             return False, None, None
 
-        # 3. Obstacles in view (Standard navigation)
+        # 3. Speech pacing guard for standard navigation:
+        # If speech is currently active OR minimum inter-speech interval hasn't elapsed, wait!
+        if is_speaking() or time_since_last_speak < self.min_speech_interval:
+            return False, None, None
+
+        # 4. Obstacles in view (Standard navigation)
         if len(detections) > 0:
             self.clear_start_time = None
             current_sig = self._make_sig(detections)
             
             # Scenario A: Same scene as previously spoken
             if current_sig == self.last_spoken_sig:
-                if now - self.last_spoken_time >= self.persistent_cooldown:
+                if time_since_last_speak >= self.persistent_cooldown:
                     announcement = format_spatial_announcement(detections, distance_meters=distance_meters)
                     self.last_spoken_time = now
                     self.last_spoken_text = announcement
@@ -643,11 +688,11 @@ class AssistiveAlertManager:
                     self.last_spoken_text = self.candidate_text
                     self.candidate_sig = None
                     main_cls = detections[0]['class']
-                    main_dir = detections[0]['direction']
+                    main_dir = detections[0].get('direction', 'ahead')
                     return True, self.candidate_text, f"Scene State Change ({main_cls} {main_dir})"
                 return False, None, None
 
-        # 4. Path is clear (len(detections) == 0 and distance >= 1.0m)
+        # 5. Path is clear (len(detections) == 0 and distance >= 1.0m)
         self.candidate_sig = None
         if self.last_spoken_sig is not None and self.last_spoken_sig != () and self.last_spoken_sig != (False,):
             # Path was previously blocked! Wait for clear_delay to avoid flutter
@@ -805,7 +850,7 @@ def main():
                 last_button_time = time.time()
 
             # Run YOLOv8 detection on CPU with multi-frame approach tracking and temporal confirmation
-            detections = detector.detect(frame, distance_meters=distance_meters, filter_unconfirmed=True)
+            detections = detector.detect(frame, distance_meters=distance_meters, filter_unconfirmed=False)
 
             # Live Terminal Scanning Feedback every 1.5 seconds so user always sees camera is alive
             if not hasattr(main, '_last_print_time'):
@@ -828,7 +873,7 @@ def main():
             if should_speak and announcement:
                 current_announcement = announcement
                 print(f"\n[TRIGGER] {trigger_reason} -> \"{current_announcement}\"")
-                speak(current_announcement)
+                speak(current_announcement, force=button_pressed)
 
             # Graphical Telemetry Display
             if not headless_mode:
