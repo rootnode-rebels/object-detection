@@ -54,15 +54,19 @@ class VoiceSynthesizer:
                 import pythoncom
                 pythoncom.CoInitialize()
                 import win32com.client
-                # SVSFlagsAsync (1) + SVSFPurgeBeforeSpeak (2)
                 v = win32com.client.Dispatch("SAPI.SpVoice")
+                try:
+                    v.Rate = -2
+                    v.Volume = 100
+                except Exception:
+                    pass
                 v.Speak(clean_text, 1 | 2)
                 return
             except Exception:
                 pass
             try:
                 import subprocess
-                ps_cmd = f'[System.Reflection.Assembly]::LoadWithPartialName("System.Speech"); $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; $s.Speak("{clean_text}");'
+                ps_cmd = f'[System.Reflection.Assembly]::LoadWithPartialName("System.Speech"); $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; $s.Rate = -2; $s.Speak("{clean_text}");'
                 subprocess.run(["powershell", "-NoProfile", "-Command", ps_cmd],
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 return
@@ -71,13 +75,18 @@ class VoiceSynthesizer:
         elif sys.platform == "darwin":
             try:
                 import subprocess
-                subprocess.run(["say", clean_text], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run(["say", "-r", "135", clean_text], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except Exception:
                 pass
         else:
             try:
                 import subprocess
-                subprocess.run(["espeak", "-ven+f3", "-s160", clean_text], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                for eng in ['espeak-ng', 'espeak']:
+                    try:
+                        subprocess.run([eng, "-ven-us", "-s130", "-p48", clean_text], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        return
+                    except Exception:
+                        pass
             except Exception:
                 pass
 

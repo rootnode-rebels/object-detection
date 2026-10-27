@@ -49,78 +49,112 @@ except ImportError:
 # 1. CROSS-PLATFORM VOICE FEEDBACK (NO ESPEAK REQUIRED)
 # ==========================================
 class VoiceSynthesizer:
-    """Speaks text aloud using native OS speech engines without blocking the video stream."""
+    """Speaks text aloud using native OS speech engines with calm pacing and anti-overload protection."""
     def __init__(self):
         self.lock = threading.Lock()
+        self.is_speaking_flag = False
+        self.last_speech_finished = 0.0
+        self._sapi_voice = None
         self.temp_wav = os.path.join(tempfile.gettempdir(), "_smart_assistant_tts.wav")
 
-    def speak(self, text):
+    def is_speaking(self):
+        with self.lock:
+            return self.is_speaking_flag
+
+    def time_since_finished(self):
+        with self.lock:
+            if self.is_speaking_flag:
+                return 0.0
+            if self.last_speech_finished == 0.0:
+                return 999.0
+            return time.time() - self.last_speech_finished
+
+    def speak(self, text, force=False):
+        if not text:
+            return
+        if not force and self.is_speaking():
+            return
         threading.Thread(target=self._speak_worker, args=(text,), daemon=True).start()
 
     def _speak_worker(self, text):
-        clean_text = text.replace('"', '').replace("'", "")
+        clean_text = text.replace('"', '').replace("'", "").strip()
+        if not clean_text:
+            return
+
+        with self.lock:
+            self.is_speaking_flag = True
+
         try:
             print(f"[VOICE] SPEAKING: {text}")
         except Exception:
             pass
 
-        # Windows Native SAPI direct non-blocking speech with audio purge (Fix for Finding F-04)
-        if sys.platform == "win32":
-            try:
-                import pythoncom
-                pythoncom.CoInitialize()
-            except Exception:
-                pass
+        try:
+            # Windows Native SAPI with comfortable conversational tempo
+            if sys.platform == "win32":
+                try:
+                    import pythoncom
+                    pythoncom.CoInitialize()
+                    import win32com.client
+                    voice = win32com.client.Dispatch("SAPI.SpVoice")
+                    self._sapi_voice = voice
+                    try:
+                        voice.Rate = -2  # Calm, comfortable ~130 wpm
+                        voice.Volume = 100
+                    except Exception:
+                        pass
+                    # Synchronous speak (0) ensures is_speaking remains True until speech finishes
+                    voice.Speak(clean_text, 0)
+                    return
+                except Exception:
+                    pass
 
-            try:
-                import win32com.client
-                # SVSFlagsAsync (1) + SVSFPurgeBeforeSpeak (2): non-blocking & purges stale cues instantly
-                voice = win32com.client.Dispatch("SAPI.SpVoice")
-                voice.Speak(clean_text, 1 | 2)
-                return
-            except Exception:
-                pass
-
-            # Fallback using async winsound
-            with self.lock:
+                # Fallback using async winsound
                 try:
                     import winsound
                     import win32com.client
                     voice = win32com.client.Dispatch("SAPI.SpVoice")
+                    try: voice.Rate = -2
+                    except Exception: pass
                     stream = win32com.client.Dispatch("SAPI.SpFileStream")
                     stream.Open(self.temp_wav, 3, False)
                     voice.AudioOutputStream = stream
                     voice.Speak(clean_text, 0)
                     stream.Close()
-                    winsound.PlaySound(self.temp_wav, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_PURGE)
+                    winsound.PlaySound(self.temp_wav, winsound.SND_FILENAME | winsound.SND_PURGE)
                     return
                 except Exception:
                     pass
 
                 # Method 2: Fallback powershell System.Speech
                 try:
-                    ps_cmd = f"Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; $s.Speak('{clean_text}')"
+                    ps_cmd = f"Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; $s.Rate = -2; $s.Speak('{clean_text}')"
                     subprocess.run(["powershell", "-NoProfile", "-Command", ps_cmd],
-                                   capture_output=True, timeout=5)
+                                   capture_output=True, timeout=10)
                     return
                 except Exception:
                     pass
 
-        # macOS native say command
-        elif sys.platform == "darwin":
-            try:
-                subprocess.run(["say", clean_text], capture_output=True, timeout=5)
-                return
-            except Exception:
-                pass
+            # macOS native say command with rate 135
+            elif sys.platform == "darwin":
+                try:
+                    subprocess.run(["say", "-r", "135", clean_text], capture_output=True, timeout=10)
+                    return
+                except Exception:
+                    pass
 
-        # Linux espeak command
-        else:
-            try:
-                subprocess.run(["espeak", "-ven+f3", "-s155", clean_text], capture_output=True, timeout=5)
-                return
-            except Exception:
-                pass
+            # Linux espeak command with steady 130 wpm
+            else:
+                for eng in ['espeak-ng', 'espeak']:
+                    try:
+                        subprocess.run([eng, "-ven-us", "-s130", "-p48", clean_text], capture_output=True, timeout=12)
+                        return
+                    except Exception:
+                        pass
+        finally:
+            with self.lock:
+                self.is_speaking_flag = False
+                self.last_speech_finished = time.time()
 
 
 def get_resource_path(relative_path):
@@ -548,7 +582,15 @@ def main():
             # Speak automatically on obstacle detection, zone change, clear-path update, or manual trigger
             time_since = current_time - last_scan_time
             state_changed = (candidate_announcement != current_announcement)
-            should_alert = manual_trigger or (state_changed and (is_emergency or time_since > 1.2)) or (has_obstacle and time_since > COOLDOWN)
+            time_since_finished = voice.time_since_finished()
+            is_speaking = voice.is_speaking()
+
+            # Prevent voice acceleration & buffer cutoffs: enforce post-speech silence window
+            # Emergency needs >= 1.8s silence after previous speech finished; standard needs >= 2.5s
+            min_post_pause = 1.8 if is_emergency else 2.5
+            pacing_ready = (not is_speaking) and (time_since_finished >= min_post_pause)
+
+            should_alert = manual_trigger or (pacing_ready and ((state_changed and (is_emergency or time_since > 2.0)) or (has_obstacle and time_since > COOLDOWN)))
 
             if should_alert:
                 current_announcement = candidate_announcement
@@ -569,7 +611,7 @@ def main():
                     trigger_reason = "Clear Path Navigation Update"
 
                 print(f"\n[TRIGGER] {trigger_reason} -> \"{current_announcement}\"")
-                voice.speak(current_announcement)
+                voice.speak(current_announcement, force=manual_trigger)
                 last_scan_time = current_time
 
             # ---------------------------------------------

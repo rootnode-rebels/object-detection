@@ -210,104 +210,155 @@ def get_memory_utilization():
 
 
 # ==========================================
-# 2. TEXT-TO-SPEECH (NON-BLOCKING)
+# 2. TEXT-TO-SPEECH (NON-BLOCKING WITH PACING PROTECTION)
 # ==========================================
-tts_process = None
-tts_lock = threading.Lock()
+class SpeechCoordinator:
+    """
+    Cross-platform, thread-safe speech coordinator.
+    Guarantees:
+    1. Prevents voice acceleration & buffer piling: speech runs in a dedicated thread and accurately tracks is_speaking().
+    2. True completion tracking: marks speech finished only after physical sound finishes playing from speakers.
+    3. Natural, calm pacing:
+       - Linux/Pi: espeak-ng/espeak at -ven-us -s130 -p48 (steady 130 wpm without chipmunk pitch/speeding up).
+       - Windows: SAPI voice.Rate = -2 (relaxed conversational tempo).
+       - macOS: say -r 135.
+    4. Force/Interruption support: tactile push button halts current non-urgent speech immediately.
+    """
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.current_process = None
+        self.is_speaking_flag = False
+        self.last_speech_started = 0.0
+        self.last_speech_finished = 0.0
+        self._sapi_voice = None
 
-def is_speaking():
-    """Checks whether speech output is currently playing."""
-    global tts_process
-    if tts_process is not None:
-        try:
-            return tts_process.poll() is None
-        except Exception:
+    def is_speaking(self):
+        with self.lock:
+            if self.is_speaking_flag:
+                return True
+            if self.current_process is not None:
+                try:
+                    return self.current_process.poll() is None
+                except Exception:
+                    pass
             return False
-    return False
 
-def speak(text, force=False):
-    """
-    Speaks text asynchronously using espeak-ng/espeak (Linux/Pi) or native OS speech without blocking.
-    Includes anti-overload protection: drops overlapping messages unless 'force' is True (e.g. tactile button or critical stop).
-    """
-    global tts_process
-    if not text:
-        return
+    def time_since_finished(self):
+        with self.lock:
+            if self.is_speaking_flag:
+                return 0.0
+            if self.last_speech_finished == 0.0:
+                return 999.0
+            return time.time() - self.last_speech_finished
 
-    # Security: sanitize text to strictly allowed printable characters and punctuation
-    clean_text = "".join(ch for ch in text if ch.isalnum() or ch in " ,.!?:;'-()\"")
-    if not clean_text.strip():
-        return
+    def stop_current(self):
+        with self.lock:
+            if self.current_process is not None:
+                try:
+                    if self.current_process.poll() is None:
+                        self.current_process.terminate()
+                        try:
+                            self.current_process.wait(timeout=0.15)
+                        except Exception:
+                            self.current_process.kill()
+                except Exception:
+                    pass
+                self.current_process = None
 
-    with tts_lock:
-        if not force and is_speaking():
-            # Speech is already in progress - prevent audio buffer piling up and bursting
+            if sys.platform == "win32" and self._sapi_voice is not None:
+                try:
+                    # SVSFlagsAsync (1) | SVSFPurgeBeforeSpeak (2) with empty string to immediately purge buffer
+                    self._sapi_voice.Speak("", 1 | 2)
+                except Exception:
+                    pass
+
+            self.is_speaking_flag = False
+            self.last_speech_finished = time.time()
+
+    def speak(self, text, force=False):
+        if not text:
             return
+
+        clean_text = "".join(ch for ch in text if ch.isalnum() or ch in " ,.!?:;'-()\"").strip()
+        if not clean_text:
+            return
+
+        if not force and self.is_speaking():
+            # Speech is already in progress - drop overlapping cues to prevent speech piling up
+            return
+
+        if force:
+            self.stop_current()
+
+        threading.Thread(target=self._play_worker, args=(clean_text,), daemon=True).start()
+
+    def _play_worker(self, clean_text):
+        with self.lock:
+            self.is_speaking_flag = True
+            self.last_speech_started = time.time()
 
         try:
             print(f"[VOICE] SPEAKING: {clean_text}")
         except Exception:
             pass
 
-        if sys.platform == "win32":
-            def _win_speak():
-                sanitized = clean_text.replace('"', '').replace("'", "")
-                try:
-                    import pythoncom
-                    pythoncom.CoInitialize()
-                except Exception:
-                    pass
+        try:
+            if sys.platform == "win32":
+                self._play_windows(clean_text)
+            elif sys.platform.startswith("linux"):
+                self._play_linux(clean_text)
+            elif sys.platform == "darwin":
+                self._play_darwin(clean_text)
+            else:
+                self._play_linux(clean_text)
+        finally:
+            with self.lock:
+                self.is_speaking_flag = False
+                self.current_process = None
+                self.last_speech_finished = time.time()
 
-                try:
-                    import win32com.client
-                    voice = win32com.client.Dispatch("SAPI.SpVoice")
-                    voice.Speak(sanitized, 1 | 2)
-                    return
-                except Exception:
-                    pass
-
-                # Fallback
-                try:
-                    import winsound
-                    import win32com.client
-                    import tempfile
-                    temp_wav = os.path.join(tempfile.gettempdir(), "_temp_assistant_tts.wav")
-                    voice = win32com.client.Dispatch("SAPI.SpVoice")
-                    stream = win32com.client.Dispatch("SAPI.SpFileStream")
-                    stream.Open(temp_wav, 3, False)
-                    voice.AudioOutputStream = stream
-                    voice.Speak(sanitized, 0)
-                    stream.Close()
-                    winsound.PlaySound(temp_wav, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_PURGE)
-                    return
-                except Exception:
-                    pass
-
-            threading.Thread(target=_win_speak, daemon=True).start()
-            return
-
-        # Linux / Raspberry Pi: Clean up prior process safely
-        if tts_process is not None:
+    def _play_windows(self, clean_text):
+        sanitized = clean_text.replace('"', '').replace("'", "")
+        try:
+            import pythoncom
+            pythoncom.CoInitialize()
+            import win32com.client
+            voice = win32com.client.Dispatch("SAPI.SpVoice")
+            self._sapi_voice = voice
+            # Set rate to -2 for clear, relaxed pacing (default 0 or unconfigured can be very fast)
             try:
-                if tts_process.poll() is None:
-                    tts_process.terminate()
-                    try:
-                        tts_process.wait(timeout=0.10)
-                    except Exception:
-                        tts_process.kill()
-                else:
-                    tts_process.wait(timeout=0.05)
+                voice.Rate = -2
+                voice.Volume = 100
             except Exception:
                 pass
+            # Synchronous speak (flag 0) in worker thread: ensures is_speaking_flag stays True until audio completes
+            voice.Speak(sanitized, 0)
+            return
+        except Exception:
+            pass
 
-        # Launch new speech with natural pacing (-s145 words/min for calm, clear output)
+        # Fallback to PowerShell System.Speech with rate -2
+        try:
+            ps_cmd = f'Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; $s.Rate = -2; $s.Speak("{sanitized}");'
+            proc = subprocess.Popen(["powershell", "-NoProfile", "-Command", ps_cmd], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            with self.lock:
+                self.current_process = proc
+            proc.wait(timeout=12.0)
+        except Exception:
+            pass
+
+    def _play_linux(self, clean_text):
+        # Calm, steady 130 words/minute (-s130) with natural US English voice (-ven-us) prevents fast chipmunk voice
         for engine in ['espeak-ng', 'espeak']:
             try:
-                tts_process = subprocess.Popen(
-                    [engine, '-ven+f3', '-s145', '-p50', clean_text],
+                proc = subprocess.Popen(
+                    [engine, '-ven-us', '-s130', '-p48', clean_text],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL
                 )
+                with self.lock:
+                    self.current_process = proc
+                proc.wait(timeout=15.0)
                 return
             except FileNotFoundError:
                 continue
@@ -315,30 +366,31 @@ def speak(text, force=False):
                 print(f"[WARN] TTS engine '{engine}' error: {e}")
                 break
 
-        if sys.platform == "darwin":
-            try:
-                tts_process = subprocess.Popen(
-                    ["say", clean_text],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL
-                )
-                return
-            except Exception:
-                pass
-
         print("[WARN] Neither 'espeak-ng' nor 'espeak' is installed. Run: sudo apt install espeak-ng -y")
+
+    def _play_darwin(self, clean_text):
+        try:
+            proc = subprocess.Popen(["say", "-r", "135", clean_text], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            with self.lock:
+                self.current_process = proc
+            proc.wait(timeout=12.0)
+        except Exception:
+            pass
+
+
+speech_coordinator = SpeechCoordinator()
+
+def is_speaking():
+    """Checks whether speech output is currently playing."""
+    return speech_coordinator.is_speaking()
+
+def speak(text, force=False):
+    """Speaks text asynchronously without blocking, protected by speech_coordinator."""
+    speech_coordinator.speak(text, force=force)
 
 def stop_tts():
     """Terminates active speech upon exit."""
-    global tts_process
-    if tts_process is not None:
-        try:
-            if tts_process.poll() is None:
-                tts_process.terminate()
-                tts_process.wait(timeout=0.5)
-        except Exception:
-            pass
-        tts_process = None
+    speech_coordinator.stop_current()
 
 
 # ==========================================
@@ -577,16 +629,18 @@ class AssistiveAlertManager:
     Guarantees:
     1. Zero repeating loop spam (25-second cooldown on static/unchanged scene).
     2. Instant alert on tactile push button press (full surroundings scan).
-    3. Prevents audio buffer overload: enforces minimum 3.0s pacing between standard announcements and 2.0s for proximity warnings.
+    3. Prevents voice acceleration & buffer piling: enforces strict post-speech silence windows
+       (minimum 2.5s calm pause after speech finishes before new navigation cues, 1.8s for emergencies).
     4. Stable signatures (uses class and horizontal column instead of noisy micro-coordinates) so frame-to-frame jitter doesn't trigger speech bursts.
-    5. Checks is_speaking() to ensure the assistant never interrupts itself or talks over ongoing speech.
+    5. Fully integrates with SpeechCoordinator.is_speaking() to ensure the assistant never interrupts itself or talks over ongoing speech.
     6. Confirms clear path (requires 2.0s of continuous clear frames before announcing 'Path clear ahead', preventing flutter).
     """
-    def __init__(self, persistent_cooldown=25.0, change_debounce=1.2, clear_delay=2.0, min_speech_interval=3.2):
+    def __init__(self, persistent_cooldown=25.0, change_debounce=1.2, clear_delay=2.0, post_speech_cooldown=2.5, emergency_cooldown=1.8):
         self.persistent_cooldown = persistent_cooldown
         self.change_debounce = change_debounce
         self.clear_delay = clear_delay
-        self.min_speech_interval = min_speech_interval
+        self.post_speech_cooldown = post_speech_cooldown
+        self.emergency_cooldown = emergency_cooldown
         
         self.last_spoken_time = 0.0
         self.last_spoken_sig = None
@@ -610,9 +664,10 @@ class AssistiveAlertManager:
 
     def evaluate(self, detections, distance_meters, button_pressed):
         now = time.time()
-        time_since_last_speak = now - self.last_spoken_time
+        time_since_finished = speech_coordinator.time_since_finished()
+        is_currently_speaking = speech_coordinator.is_speaking()
         
-        # 1. Tactile Button Pressed -> Immediate full surroundings scan (always allowed)
+        # 1. Tactile Button Pressed -> Immediate full surroundings scan (always allowed, forces ongoing speech to stop)
         if button_pressed:
             announcement = format_spatial_announcement(detections, distance_meters=distance_meters, is_full_scan=True)
             self.last_spoken_time = now
@@ -633,12 +688,16 @@ class AssistiveAlertManager:
         is_emergency = has_approaching or sonar_prox or visual_prox
 
         if is_emergency:
-            # Enforce at least 2.0s refractory period even in emergency to prevent voice buffer piling and bursts
-            if time_since_last_speak < 2.0:
+            # If assistant is currently speaking, do not talk over itself
+            if is_currently_speaking:
+                return False, None, None
+
+            # Enforce at least emergency_cooldown (1.8s) of calm pause after previous speech finished
+            if time_since_finished < self.emergency_cooldown:
                 return False, None, None
 
             current_sig = self._make_sig(detections, emergency=True)
-            if current_sig != self.last_spoken_sig or time_since_last_speak >= 3.0:
+            if current_sig != self.last_spoken_sig or (now - self.last_spoken_time >= 3.5):
                 announcement = format_spatial_announcement(detections, distance_meters=distance_meters)
                 self.last_spoken_time = now
                 self.last_spoken_sig = current_sig
@@ -656,8 +715,8 @@ class AssistiveAlertManager:
             return False, None, None
 
         # 3. Speech pacing guard for standard navigation:
-        # If speech is currently active OR minimum inter-speech interval hasn't elapsed, wait!
-        if is_speaking() or time_since_last_speak < self.min_speech_interval:
+        # If speech is currently active OR post-speech calm window hasn't elapsed, wait!
+        if is_currently_speaking or time_since_finished < self.post_speech_cooldown:
             return False, None, None
 
         # 4. Obstacles in view (Standard navigation)
@@ -667,7 +726,7 @@ class AssistiveAlertManager:
             
             # Scenario A: Same scene as previously spoken
             if current_sig == self.last_spoken_sig:
-                if time_since_last_speak >= self.persistent_cooldown:
+                if now - self.last_spoken_time >= self.persistent_cooldown:
                     announcement = format_spatial_announcement(detections, distance_meters=distance_meters)
                     self.last_spoken_time = now
                     self.last_spoken_text = announcement
@@ -850,7 +909,7 @@ def main():
                 last_button_time = time.time()
 
             # Run YOLOv8 detection on CPU with multi-frame approach tracking and temporal confirmation
-            detections = detector.detect(frame, distance_meters=distance_meters, filter_unconfirmed=False)
+            detections = detector.detect(frame, distance_meters=distance_meters, filter_unconfirmed=True)
 
             # Live Terminal Scanning Feedback every 1.5 seconds so user always sees camera is alive
             if not hasattr(main, '_last_print_time'):

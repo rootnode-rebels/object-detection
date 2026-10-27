@@ -197,7 +197,7 @@ def test_speech():
         test_phrase = "Smart vision assistant voice test. System ready."
         print(f"  Speaking phrase : \"{test_phrase}\"...")
         try:
-            subprocess.run([found_engine, '-ven+f3', '-s160', '-p50', test_phrase], timeout=5)
+            subprocess.run([found_engine, '-ven-us', '-s130', '-p48', test_phrase], timeout=5)
             print("  [PASS] Audio output verified successfully.")
             return True
         except Exception as e:

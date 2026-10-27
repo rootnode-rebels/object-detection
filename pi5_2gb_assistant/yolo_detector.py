@@ -326,7 +326,7 @@ class ApproachTracker:
 
                 det["track_id"] = best_tid
                 det["hits"] = trk["hits"]
-                det["is_confirmed"] = True
+                det["is_confirmed"] = (trk["hits"] >= 2) or is_approaching or (distance_meters is not None and 0.0 < distance_meters < 1.0)
                 det["is_approaching"] = is_approaching
                 det["approach_speed"] = approach_speed
                 det["growth_rate"] = growth_rate
@@ -350,7 +350,7 @@ class ApproachTracker:
                 }
                 det["track_id"] = tid
                 det["hits"] = 1
-                det["is_confirmed"] = True
+                det["is_confirmed"] = is_approaching or (distance_meters is not None and 0.0 < distance_meters < 1.0)
                 det["is_approaching"] = False
                 det["approach_speed"] = None
                 det["growth_rate"] = 0.0
