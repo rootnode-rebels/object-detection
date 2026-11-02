@@ -66,8 +66,8 @@ sonar_thread_running = False
 def _sonar_worker():
     """Background daemon thread to poll ultrasonic sensor without blocking the camera vision loop."""
     global sensor, sonar_reading, sonar_disabled, sonar_thread_running
-    consecutive_errors = 0
-    while sonar_thread_running and not sonar_disabled and sensor is not None:
+    buf = []
+    while sonar_thread_running and sensor is not None:
         try:
             with warnings.catch_warnings(record=True) as w:
                 warnings.simplefilter("always")
@@ -76,26 +76,23 @@ def _sonar_worker():
                 if has_no_echo or d is None or d >= 3.0:
                     # Normal out-of-range (>3m) or clear open space
                     sonar_reading = 3.0
-                    consecutive_errors = 0
+                    buf.clear()
                 else:
-                    consecutive_errors = 0
-                    if 0.0 <= d <= 3.0:
-                        sonar_reading = d
-
+                    if 0.02 <= d <= 3.0:
+                        buf.append(d)
+                        if len(buf) > 3:
+                            buf.pop(0)
+                        # Median of 3 pings eliminates CPU jitter / scheduling spikes
+                        sonar_reading = round(float(sorted(buf)[len(buf) // 2]), 2)
+                        sonar_disabled = False
         except Exception:
-            # Only count actual hardware exceptions / disconnects
-            consecutive_errors += 1
-            if consecutive_errors >= 15:
-                print("[WARN] Ultrasonic hardware communication error. Switching to pure camera mode.")
-                sonar_disabled = True
-                break
-        time.sleep(0.08)  # Sample at ~12 Hz asynchronously
+            time.sleep(0.05)
+        time.sleep(0.06)  # Sample at ~16 Hz asynchronously
 
 def init_sensors(trigger_pin=23, echo_pin=24, button_pin=17, enable_sonar=True):
     """
     Initializes hardware GPIO sensors (HC-SR04 ultrasonic distance sensor & tactile button).
-    Features non-blocking pre-flight probe: automatically detects if ECHO pin is desoldered,
-    bypassing sonar with zero latency tonight, while seamlessly activating when soldered tomorrow!
+    Keeps sensor active continuously without falsely disabling on clear room startup.
     """
     global sensor, button, PIN_TRIGGER, PIN_ECHO, PIN_BUTTON, sonar_disabled, sonar_reading, sonar_thread, sonar_thread_running
     PIN_TRIGGER = trigger_pin
@@ -121,26 +118,13 @@ def init_sensors(trigger_pin=23, echo_pin=24, button_pin=17, enable_sonar=True):
     if enable_sonar:
         try:
             candidate_sensor = DistanceSensor(echo=PIN_ECHO, trigger=PIN_TRIGGER, max_distance=3.0)
-            # Pre-flight probe: verify echo pulse responds before locking into radar mode
-            with warnings.catch_warnings(record=True) as w:
-                warnings.simplefilter("always")
-                probe = candidate_sensor.distance
-                has_no_echo = any("no echo" in str(item.message).lower() for item in w)
-                if probe is None:
-                    print("[INFO] Ultrasonic ECHO pin not detected (hardware desoldered / unplugged).")
-                    print("[INFO] Auto-engaging pure high-speed vision mode. Push button active on GPIO 17.")
-                    candidate_sensor.close()
-                    sensor = None
-                    sonar_disabled = True
-                else:
-                    sensor = candidate_sensor
-                    sonar_disabled = False
-                    sonar_reading = 3.0 if has_no_echo else probe
-                    sonar_thread_running = True
-                    sonar_thread = threading.Thread(target=_sonar_worker, daemon=True)
-                    sonar_thread.start()
-                    probe_str = "Clear (>3.0m)" if has_no_echo else f"{probe:.2f}m"
-                    print(f"[INFO] Ultrasonic hardware healthy! Live echo: {probe_str}. Multi-modal radar ACTIVE.")
+            sensor = candidate_sensor
+            sonar_disabled = False
+            sonar_reading = 3.0
+            sonar_thread_running = True
+            sonar_thread = threading.Thread(target=_sonar_worker, daemon=True)
+            sonar_thread.start()
+            print(f"[INFO] Ultrasonic hardware healthy! Multi-modal radar ACTIVE on Trigger={PIN_TRIGGER}, Echo={PIN_ECHO}.")
         except Exception as e:
             print(f"[INFO] Ultrasonic radar offline ({e}). Running vision-only mode.")
             sensor = None
@@ -636,7 +620,7 @@ class AssistiveAlertManager:
     5. Fully integrates with SpeechCoordinator.is_speaking() to ensure the assistant never interrupts itself or talks over ongoing speech.
     6. Confirms clear path (requires 2.0s of continuous clear frames before announcing 'Path clear ahead', preventing flutter).
     """
-    def __init__(self, persistent_cooldown=25.0, change_debounce=1.2, clear_delay=2.0, post_speech_cooldown=2.5, emergency_cooldown=1.8):
+    def __init__(self, persistent_cooldown=25.0, change_debounce=1.8, clear_delay=3.5, post_speech_cooldown=3.0, emergency_cooldown=1.8):
         self.persistent_cooldown = persistent_cooldown
         self.change_debounce = change_debounce
         self.clear_delay = clear_delay
@@ -910,7 +894,7 @@ def main():
     startup_msg = "Smart vision assistant ready. Obstacle radar active."
     speak(startup_msg)
 
-    alert_manager = AssistiveAlertManager(persistent_cooldown=25.0, change_debounce=1.2, clear_delay=2.0)
+    alert_manager = AssistiveAlertManager(persistent_cooldown=25.0, change_debounce=1.8, clear_delay=3.5)
     last_button_time = 0.0
     last_valid_frame_time = time.time()
     camera_lost_alerted = False

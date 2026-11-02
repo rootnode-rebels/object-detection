@@ -883,12 +883,23 @@ def format_spatial_announcement(detections, distance_meters=None, target_zone=No
         return f"Warning, overhead obstacle directly ahead: there is {top_names}. Watch your head."
 
     # =========================================================
-    # 5. PRIORITY 4: IMMEDIATE PROXIMITY HAZARD (< 1.0 Meter in Front)
+    # 5. PRIORITY 4: IMMEDIATE PROXIMITY HAZARD (< 0.85m via Sonar / Vision)
     # =========================================================
+    if distance_meters is not None and 0.02 <= distance_meters < 0.85:
+        cm = int(round(distance_meters * 100))
+        if cm <= 40:
+            return f"Stop! Close obstacle directly ahead, at {cm} centimeters! Stop."
+        obs = m_name if m_name else "an obstacle"
+        if not l_name and r_name:
+            return f"Stop! There is {obs} directly in front of you, at {distance_meters:.2f} meters. Step aside to the left."
+        elif not r_name and l_name:
+            return f"Stop! There is {obs} directly in front of you, at {distance_meters:.2f} meters. Step aside to the right."
+        else:
+            return f"Stop! There is {obs} directly in front of you, at {distance_meters:.2f} meters. Please stop."
+
     front_label = m_name if m_name else ("an obstacle" if middle_proximity else None)
 
     if middle_proximity and front_label:
-        fl_cap = front_label[0].upper() + front_label[1:]
         if not l_name and r_name:
             return f"Stop! There is {front_label} directly in front of you{dist_str}. Step aside to the left."
         elif not r_name and l_name:
@@ -899,7 +910,7 @@ def format_spatial_announcement(detections, distance_meters=None, target_zone=No
             return f"Stop! There is {front_label} directly in front of you{dist_str}. Path blocked, please stop."
 
     # =========================================================
-    # 6. PRIORITY 5: PATH NAVIGATION (Obstacles at Standard Distance)
+    # 6. PRIORITY 5: PATH NAVIGATION (Clear, Non-Conflicting Guidance)
     # =========================================================
     has_left = bool(l_name)
     has_right = bool(r_name)
@@ -908,19 +919,19 @@ def format_spatial_announcement(detections, distance_meters=None, target_zone=No
     if not has_front and not has_left and not has_right:
         return "Path clear ahead. Continue straight."
     elif has_left and not has_front and not has_right:
-        return f"There is {l_name} on your left{l_dist_str}. Path ahead is clear, continue straight."
+        return f"Caution, {l_name} on your left{l_dist_str}."
     elif has_right and not has_front and not has_left:
-        return f"There is {r_name} on your right{r_dist_str}. Path ahead is clear, continue straight."
+        return f"Caution, {r_name} on your right{r_dist_str}."
     elif has_front and not has_left and not has_right:
-        return f"There is {m_name} directly in front of you{dist_str}. Safe to go right or left."
+        return f"There is {m_name} directly in front of you{dist_str}. Move left or right."
     elif has_front and has_left and not has_right:
-        return f"There is {m_name} in front of you and {l_name} on your left{dist_str}. Safe to go right."
+        return f"There is {m_name} in front of you and {l_name} on your left{dist_str}. Steer right."
     elif has_front and has_right and not has_left:
-        return f"There is {m_name} in front of you and {r_name} on your right{dist_str}. Safe to go left."
+        return f"There is {m_name} in front of you and {r_name} on your right{dist_str}. Steer left."
     elif not has_front and has_left and has_right:
-        return f"There is {l_name} on your left and {r_name} on your right. Center path is clear, continue straight."
+        return f"There is {l_name} on your left and {r_name} on your right. Center corridor is clear."
     else:
-        return f"There is {m_name} ahead, {l_name} on your left, and {r_name} on your right. Path blocked, please stop."
+        return f"Obstacles ahead on left and right. Path blocked, please stop."
 
 
 if __name__ == "__main__":
