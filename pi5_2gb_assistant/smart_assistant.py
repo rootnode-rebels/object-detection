@@ -621,23 +621,22 @@ class ThreadedCameraStream:
 
 
 # ==========================================
-# 4. ASSISTIVE ALERT MANAGER (Stateful Debouncing & Anti-Repetition)
+# 4. ASSISTIVE ALERT MANAGER (Strict Anti-Repetition & Track Memory)
 # ==========================================
 class AssistiveAlertManager:
     """
     Intelligent Alert State Manager for Visually Impaired Navigation.
     
     Guarantees:
-    1. Zero repeating loop spam (25-second cooldown on static/unchanged scene).
-    2. Instant alert on tactile push button press (full surroundings scan).
-    3. Prevents voice acceleration & buffer piling: enforces strict post-speech silence windows
-       (minimum 2.5s calm pause after speech finishes before new navigation cues, 1.8s for emergencies).
-    4. Stable signatures (uses class and horizontal column instead of noisy micro-coordinates) so frame-to-frame jitter doesn't trigger speech bursts.
-    5. Fully integrates with SpeechCoordinator.is_speaking() to ensure the assistant never interrupts itself or talks over ongoing speech.
-    6. Confirms clear path (requires 2.0s of continuous clear frames before announcing 'Path clear ahead', preventing flutter).
+    1. Strict One-Time Pronunciation: Once an obstacle/person is identified and announced,
+       it is NOT pronounced again as long as it remains present in view.
+    2. Dynamic Approach Exception: If a previously announced stationary object begins actively
+       approaching towards the user (is_approaching=True), a caution alert is triggered.
+    3. Emergency Distance Safety: Immediate stop warning if distance drops to <0.40m.
+    4. Instant On-Demand Query: Tactile button press triggers an immediate full scan at any time.
+    5. Confirmed Path Clear: Requires continuous clear frames before announcing 'Path clear ahead'.
     """
-    def __init__(self, persistent_cooldown=25.0, change_debounce=1.8, clear_delay=3.5, post_speech_cooldown=3.0, emergency_cooldown=1.8):
-        self.persistent_cooldown = persistent_cooldown
+    def __init__(self, change_debounce=1.8, clear_delay=3.0, post_speech_cooldown=2.5, emergency_cooldown=1.8):
         self.change_debounce = change_debounce
         self.clear_delay = clear_delay
         self.post_speech_cooldown = post_speech_cooldown
@@ -647,6 +646,11 @@ class AssistiveAlertManager:
         self.last_spoken_sig = None
         self.last_spoken_text = ""
         
+        # Track-level & semantic memory:
+        self.announced_track_ids = set()       # Track IDs already announced
+        self.announced_approaches = set()      # Track IDs where approach was already warned
+        self.last_emergency_dist = None       # Distance of last critical proximity stop
+        
         self.candidate_sig = None
         self.candidate_first_seen = 0.0
         self.candidate_text = ""
@@ -654,13 +658,11 @@ class AssistiveAlertManager:
         self.clear_start_time = None
 
     def _make_sig(self, detections, emergency=False):
-        # Stable semantic signature: object class and horizontal column ('left', 'middle', 'right').
-        # Using column instead of volatile 9-grid box coordinates prevents minor hand tremors or bounding box jitter
-        # from changing the signature every 100 milliseconds.
+        # Stable semantic signature: object class and track_id (or col fallback)
         sig_items = []
         for d in detections:
-            col = d.get("col", "middle")
-            sig_items.append((d["class"], col))
+            tid = d.get("track_id", d.get("col", "middle"))
+            sig_items.append((d["class"], tid))
         return tuple(sorted(sig_items)) + (emergency,)
 
     def evaluate(self, detections, distance_meters, button_pressed):
@@ -668,91 +670,117 @@ class AssistiveAlertManager:
         time_since_finished = speech_coordinator.time_since_finished()
         is_currently_speaking = speech_coordinator.is_speaking()
         
-        # 1. Tactile Button Pressed -> Immediate full surroundings scan (always allowed, forces ongoing speech to stop)
+        current_track_ids = {d.get("track_id") for d in detections if d.get("track_id") is not None}
+        
+        # Prune announced tracks that have left the camera view
+        if current_track_ids:
+            self.announced_track_ids = self.announced_track_ids.intersection(current_track_ids)
+            self.announced_approaches = self.announced_approaches.intersection(current_track_ids)
+        else:
+            self.announced_track_ids.clear()
+            self.announced_approaches.clear()
+
+        # 1. Tactile Button Pressed -> Immediate manual surroundings scan (always allowed)
         if button_pressed:
             announcement = format_spatial_announcement(detections, distance_meters=distance_meters, is_full_scan=True)
             self.last_spoken_time = now
             self.last_spoken_sig = self._make_sig(detections)
             self.last_spoken_text = announcement
+            self.announced_track_ids.update(current_track_ids)
             self.candidate_sig = None
             self.clear_start_time = None
             return True, announcement, "Tactile Button Pressed (Full Surroundings Scan)"
 
-        # 2. Emergency Hazard: approaching hazard OR immediate proximity < 0.85m
-        has_approaching = any(d.get("is_approaching", False) for d in detections)
-        sonar_prox = (distance_meters is not None and 0.0 < distance_meters < 0.85)
-        visual_prox = any(
-            ("middle" in d.get("zone", "") or "center" in d.get("zone", "")) and
-            (d.get("visual_distance") is not None and d.get("visual_distance") < 0.85)
-            for d in detections
-        )
-        is_emergency = has_approaching or sonar_prox or visual_prox
-
-        if is_emergency:
-            # If assistant is currently speaking, do not talk over itself
+        # 2. Critical Safety Proximity (< 0.40m = 40 cm Stop Hazard)
+        is_critical_close = (distance_meters is not None and 0.02 <= distance_meters < 0.40)
+        if is_critical_close:
             if is_currently_speaking:
                 return False, None, None
-
-            # Enforce at least emergency_cooldown (1.8s) of calm pause after previous speech finished
-            if time_since_finished < self.emergency_cooldown:
-                return False, None, None
-
-            current_sig = self._make_sig(detections, emergency=True)
-            if current_sig != self.last_spoken_sig or (now - self.last_spoken_time >= 3.5):
+            # Only repeat if distance dropped significantly (>= 15cm closer) or initial trigger
+            if self.last_emergency_dist is None or (self.last_emergency_dist - distance_meters >= 0.15):
                 announcement = format_spatial_announcement(detections, distance_meters=distance_meters)
                 self.last_spoken_time = now
-                self.last_spoken_sig = current_sig
+                self.last_spoken_sig = self._make_sig(detections, emergency=True)
                 self.last_spoken_text = announcement
-                self.candidate_sig = None
-                self.clear_start_time = None
-                if has_approaching:
-                    reason = "Approaching Hazard Alert"
-                elif sonar_prox:
-                    reason = f"Proximity Alert ({distance_meters:.2f}m)"
-                else:
-                    v_d = detections[0].get("visual_distance", 0.8)
-                    reason = f"Visual Proximity Alert ({v_d:.1f}m)"
-                return True, announcement, reason
+                self.last_emergency_dist = distance_meters
+                return True, announcement, f"Critical Proximity Stop ({distance_meters*100:.0f}cm)"
             return False, None, None
+        else:
+            self.last_emergency_dist = None
 
-        # 3. Speech pacing guard for standard navigation:
-        # If speech is currently active OR post-speech calm window hasn't elapsed, wait!
+        # 3. Dynamic Hazard: Newly approaching objects that haven't been warned yet
+        newly_approaching = [
+            d for d in detections 
+            if d.get("is_approaching") and d.get("track_id") not in self.announced_approaches
+        ]
+        if newly_approaching:
+            if is_currently_speaking or time_since_finished < self.emergency_cooldown:
+                return False, None, None
+            
+            announcement = format_spatial_announcement(detections, distance_meters=distance_meters)
+            self.last_spoken_time = now
+            self.last_spoken_sig = self._make_sig(detections, emergency=True)
+            self.last_spoken_text = announcement
+            for d in newly_approaching:
+                if d.get("track_id") is not None:
+                    self.announced_approaches.add(d["track_id"])
+                    self.announced_track_ids.add(d["track_id"])
+            return True, announcement, "Approaching Hazard Alert"
+
+        # 4. Speech pacing guard for standard navigation:
         if is_currently_speaking or time_since_finished < self.post_speech_cooldown:
             return False, None, None
 
-        # 4. Obstacles in view (Standard navigation)
+        # 5. Obstacles in view (Standard navigation)
         if len(detections) > 0:
             self.clear_start_time = None
             current_sig = self._make_sig(detections)
             
-            # Scenario A: Same scene as previously spoken
-            if current_sig == self.last_spoken_sig:
-                if now - self.last_spoken_time >= self.persistent_cooldown:
-                    announcement = format_spatial_announcement(detections, distance_meters=distance_meters)
-                    self.last_spoken_time = now
-                    self.last_spoken_text = announcement
-                    return True, announcement, "Periodic Obstacle Reminder"
-                return False, None, None
+            # Find any unannounced tracks in view
+            unannounced = [d for d in detections if d.get("track_id") is not None and d.get("track_id") not in self.announced_track_ids]
             
-            # Scenario B: Scene has changed (new obstacle or direction change)
+            # If all objects in view have ALREADY been announced and signature hasn't changed:
+            # STRICT ZERO REPETITION: Do NOT pronounce again!
+            if not unannounced and current_sig == self.last_spoken_sig:
+                return False, None, None
+
+            # New obstacle detected or new state candidate:
             if current_sig != self.candidate_sig:
                 self.candidate_sig = current_sig
                 self.candidate_first_seen = now
                 self.candidate_text = format_spatial_announcement(detections, distance_meters=distance_meters)
                 return False, None, None
             else:
-                # Candidate has been stable for change_debounce seconds
+                # Candidate has been stable for change_debounce (1.8s)
                 if now - self.candidate_first_seen >= self.change_debounce:
                     self.last_spoken_time = now
                     self.last_spoken_sig = current_sig
                     self.last_spoken_text = self.candidate_text
                     self.candidate_sig = None
+                    self.announced_track_ids.update(current_track_ids)
                     main_cls = detections[0]['class']
                     main_dir = detections[0].get('direction', 'ahead')
-                    return True, self.candidate_text, f"Scene State Change ({main_cls} {main_dir})"
+                    return True, self.candidate_text, f"New Obstacle Identified ({main_cls} {main_dir})"
                 return False, None, None
 
-        # 5. Path is clear (len(detections) == 0 and distance >= 1.0m)
+        # 6. Path is clear (len(detections) == 0 and distance >= 1.0m)
+        self.candidate_sig = None
+        if self.last_spoken_sig is not None and self.last_spoken_sig != () and self.last_spoken_sig != (False,):
+            # Path was previously blocked! Wait for clear_delay to avoid flutter
+            if self.clear_start_time is None:
+                self.clear_start_time = now
+                return False, None, None
+            elif now - self.clear_start_time >= self.clear_delay:
+                clear_msg = "Path clear ahead. Continue straight."
+                self.last_spoken_time = now
+                self.last_spoken_sig = ()
+                self.last_spoken_text = clear_msg
+                self.announced_track_ids.clear()
+                self.announced_approaches.clear()
+                return True, clear_msg, "Clear Path Navigation Update"
+            return False, None, None
+
+        return False, None, None
         self.candidate_sig = None
         if self.last_spoken_sig is not None and self.last_spoken_sig != () and self.last_spoken_sig != (False,):
             # Path was previously blocked! Wait for clear_delay to avoid flutter

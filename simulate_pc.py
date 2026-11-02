@@ -640,7 +640,7 @@ def main():
             min_post_pause = 1.8 if is_emergency else 2.5
             pacing_ready = (not is_speaking) and (time_since_finished >= min_post_pause)
 
-            should_alert = manual_trigger or (pacing_ready and ((state_changed and (is_emergency or time_since > 2.0)) or (has_obstacle and time_since > COOLDOWN)))
+            should_alert = manual_trigger or (pacing_ready and state_changed and (is_emergency or time_since > 2.0))
 
             if should_alert:
                 current_announcement = candidate_announcement
