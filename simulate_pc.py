@@ -612,9 +612,9 @@ def main():
             # AUTOMATIC REAL-TIME OBSTACLE VOICE GUIDANCE
             # ---------------------------------------------
             # Automatically speaks navigation commands whenever an obstacle is detected!
-            has_obstacle = (len(detections) > 0) or (distance_meters < 1.0)
+            has_obstacle = (len(detections) > 0) or (distance_meters < 1.8)
             has_approaching = any(d.get("is_approaching", False) for d in detections)
-            is_emergency = has_approaching or (distance_meters < 1.0)
+            is_emergency = has_approaching or (distance_meters < 0.50)
             current_time = time.time()
 
             candidate_announcement = format_spatial_announcement(

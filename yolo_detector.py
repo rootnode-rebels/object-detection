@@ -667,16 +667,25 @@ def format_spatial_announcement(detections, distance_meters=None, target_zone=No
     # Multi-modal distance fusion helper:
     # 1. Ultrasonic sensor takes priority when connected (< 3.0m).
     # 2. Monocular pinhole geometry provides real-world visual distance estimation when unplugged or for lateral objects.
+    # Distances under 1.0 meter are phrased in centimeters for immediate clarity to blind individuals.
     def _get_item_dist_str(items, is_center=False):
         if is_center and distance_meters is not None and 0.0 < distance_meters < 3.0:
+            if distance_meters < 1.0:
+                return f", at {int(round(distance_meters * 100))} centimeters"
             return f", at {distance_meters:.1f} meters"
         if items and items[0].get("visual_distance") is not None:
             vd = items[0]["visual_distance"]
             if vd <= 5.0:
                 if is_center and distance_meters is not None and 0.0 < distance_meters < 3.0:
+                    if distance_meters < 1.0:
+                        return f", at {int(round(distance_meters * 100))} centimeters"
                     return f", at {distance_meters:.1f} meters"
+                if vd < 1.0:
+                    return f", at about {int(round(vd * 100))} centimeters"
                 return f", at about {vd:.1f} meters"
         elif is_center and distance_meters is not None and 0.0 < distance_meters < 3.0:
+            if distance_meters < 1.0:
+                return f", at {int(round(distance_meters * 100))} centimeters"
             return f", at {distance_meters:.1f} meters"
         return ""
 
@@ -743,7 +752,9 @@ def format_spatial_announcement(detections, distance_meters=None, target_zone=No
         (it.get("visual_distance") is not None and it["visual_distance"] < 1.1)
         for it in center_items
     )
-    middle_proximity = (distance_meters is not None and 0.0 < distance_meters < 1.0) or visual_proximity
+    # Ultrasonic detection directly ahead (detects walls, doors, pillars without visual boxes):
+    sonar_center_detected = (distance_meters is not None and 0.02 <= distance_meters < 1.8)
+    middle_proximity = (distance_meters is not None and 0.02 <= distance_meters < 1.0) or visual_proximity
     has_low_ahead = bool(zones["bottom-middle"])
     has_overhead = bool(zones["top-middle"])
 
@@ -758,8 +769,9 @@ def format_spatial_announcement(detections, distance_meters=None, target_zone=No
             scan_parts.append(f"Caution, {app_art} {app_n} is approaching towards you")
         if center_items:
             scan_parts.append(f"{m_name} directly in front of you{dist_str}")
-        elif middle_proximity:
-            scan_parts.append(f"an obstacle directly in front of you{dist_str}")
+        elif sonar_center_detected:
+            sonar_str = f"at {int(round(distance_meters * 100))} centimeters" if distance_meters < 1.0 else f"at {distance_meters:.1f} meters"
+            scan_parts.append(f"an obstacle directly in front of you, {sonar_str}")
 
         if left_items:
             scan_parts.append(f"{l_name} on your left{l_dist_str}")
@@ -775,10 +787,10 @@ def format_spatial_announcement(detections, distance_meters=None, target_zone=No
 
         if scan_parts:
             if not right_items:
-                action = "Path is clear on the right."
+                action = "Path is clear on your right."
             elif not left_items:
-                action = "Path is clear on the left."
-            elif not center_items and not middle_proximity:
+                action = "Path is clear on your left."
+            elif not center_items and not sonar_center_detected:
                 action = "Center path is clear to walk."
             else:
                 action = "Path blocked, please step aside."
@@ -817,8 +829,9 @@ def format_spatial_announcement(detections, distance_meters=None, target_zone=No
             z_loc = tz
 
         if not tz_name:
-            if tz in ["middle", "ahead", "center", "infront"] and middle_proximity:
-                return f"There is an obstacle directly in front of you{dist_str}. Step aside to the left or right."
+            if tz in ["middle", "ahead", "center", "infront"] and (middle_proximity or sonar_center_detected):
+                dist_info = dist_str if dist_str else (f", at {distance_meters:.1f} meters" if distance_meters else "")
+                return f"There is an obstacle directly in front of you{dist_info}. Step aside to the left or right."
             return f"{z_loc.capitalize()} is clear."
 
         target_approaching = any(it.get("is_approaching", False) for it in tz_items)
@@ -851,12 +864,17 @@ def format_spatial_announcement(detections, distance_meters=None, target_zone=No
 
         if "middle" in app_zone and "center" in app_zone:
             if is_fast:
-                return f"Warning! {app_name.capitalize()} approaching fast directly ahead{app_dist_str}! Step aside immediately."
+                evasion = "Step to your right immediately." if not right_items else ("Step to your left immediately." if not left_items else "Step back immediately.")
+                return f"Warning! {app_name.capitalize()} approaching fast directly ahead{app_dist_str}! {evasion}"
             else:
                 return f"Caution, {app_name} is approaching towards you directly ahead{app_dist_str}."
         elif "left" in app_zone:
+            if is_fast:
+                return f"Warning! {app_name.capitalize()} approaching fast on your left! Step to your right."
             return f"Caution, {app_name} approaching on your left{app_dist_str}."
         elif "right" in app_zone:
+            if is_fast:
+                return f"Warning! {app_name.capitalize()} approaching fast on your right! Step to your left."
             return f"Caution, {app_name} approaching on your right{app_dist_str}."
         elif "bottom" in app_zone:
             return f"Warning, {app_name} approaching directly ahead on the ground{app_dist_str}. Watch your step."
@@ -868,34 +886,42 @@ def format_spatial_announcement(detections, distance_meters=None, target_zone=No
     # =========================================================
     if has_low_ahead:
         low_names = _format_item_names(zones["bottom-middle"])
-        return f"Warning, ground hazard in front of you: there is {low_names}{dist_str}. Watch your step."
+        is_drop_hazard = any(it["class"] in ["staircase", "pothole", "manhole", "drain"] for it in zones["bottom-middle"])
+        if is_drop_hazard:
+            return f"Warning, drop hazard directly ahead: {low_names}{dist_str}. Slow down and check with cane."
+        return f"Warning, ground hazard in front of you: {low_names}{dist_str}. Watch your step."
 
     center_ground_hazards = [it for it in center_items if it["class"] in GROUND_HAZARD_CLASSES]
     if center_ground_hazards:
         gh_name = _format_item_names(center_ground_hazards)
-        return f"Warning, there is {gh_name} directly in front of you on the ground{dist_str}. Watch your step."
+        is_drop_hazard = any(it["class"] in ["staircase", "pothole", "manhole", "drain"] for it in center_ground_hazards)
+        if is_drop_hazard:
+            return f"Warning, drop hazard directly ahead: {gh_name}{dist_str}. Slow down and check with cane."
+        return f"Warning, ground obstacle ahead: {gh_name}{dist_str}. Watch your step."
 
     # =========================================================
     # 4. PRIORITY 3: OVERHEAD HAZARDS (Head Bump Risks: Tree Branches, Signs)
     # =========================================================
     if has_overhead:
         top_names = _format_item_names(zones["top-middle"])
-        return f"Warning, overhead obstacle directly ahead: there is {top_names}. Watch your head."
+        return f"Warning, overhead obstacle directly ahead: {top_names}. Duck or stop."
 
     # =========================================================
     # 5. PRIORITY 4: IMMEDIATE PROXIMITY HAZARD (< 0.85m via Sonar / Vision)
     # =========================================================
     if distance_meters is not None and 0.02 <= distance_meters < 0.85:
         cm = int(round(distance_meters * 100))
-        if cm <= 40:
+        if cm <= 50:
             return f"Stop! Close obstacle directly ahead, at {cm} centimeters! Stop."
         obs = m_name if m_name else "an obstacle"
         if not l_name and r_name:
-            return f"Stop! There is {obs} directly in front of you, at {distance_meters:.2f} meters. Step aside to the left."
+            return f"Stop! There is {obs} directly in front of you, at {cm} centimeters. Step aside to the left."
         elif not r_name and l_name:
-            return f"Stop! There is {obs} directly in front of you, at {distance_meters:.2f} meters. Step aside to the right."
+            return f"Stop! There is {obs} directly in front of you, at {cm} centimeters. Step aside to the right."
+        elif not l_name and not r_name:
+            return f"Stop! There is {obs} directly in front of you, at {cm} centimeters. Step aside to the left or right."
         else:
-            return f"Stop! There is {obs} directly in front of you, at {distance_meters:.2f} meters. Please stop."
+            return f"Stop! There is {obs} directly in front of you, at {cm} centimeters. Path blocked, please stop."
 
     front_label = m_name if m_name else ("an obstacle" if middle_proximity else None)
 
@@ -912,6 +938,11 @@ def format_spatial_announcement(detections, distance_meters=None, target_zone=No
     # =========================================================
     # 6. PRIORITY 5: PATH NAVIGATION (Clear, Non-Conflicting Guidance)
     # =========================================================
+    # If ultrasonic detects forward obstacle (e.g. 0.85m to 1.8m) but vision didn't label it:
+    if not m_name and sonar_center_detected:
+        m_name = "an obstacle"
+        dist_str = f", at {distance_meters:.1f} meters"
+
     has_left = bool(l_name)
     has_right = bool(r_name)
     has_front = bool(m_name)
@@ -919,17 +950,17 @@ def format_spatial_announcement(detections, distance_meters=None, target_zone=No
     if not has_front and not has_left and not has_right:
         return "Path clear ahead. Continue straight."
     elif has_left and not has_front and not has_right:
-        return f"Caution, {l_name} on your left{l_dist_str}."
+        return f"Caution, {l_name} on your left{l_dist_str}. Path ahead is open."
     elif has_right and not has_front and not has_left:
-        return f"Caution, {r_name} on your right{r_dist_str}."
+        return f"Caution, {r_name} on your right{r_dist_str}. Path ahead is open."
     elif has_front and not has_left and not has_right:
-        return f"There is {m_name} directly in front of you{dist_str}. Move left or right."
+        return f"There is {m_name} directly in front of you{dist_str}. Move left or right to bypass."
     elif has_front and has_left and not has_right:
-        return f"There is {m_name} in front of you and {l_name} on your left{dist_str}. Steer right."
+        return f"There is {m_name} directly in front of you{dist_str}, and {l_name} on your left. Steer right."
     elif has_front and has_right and not has_left:
-        return f"There is {m_name} in front of you and {r_name} on your right{dist_str}. Steer left."
+        return f"There is {m_name} directly in front of you{dist_str}, and {r_name} on your right. Steer left."
     elif not has_front and has_left and has_right:
-        return f"There is {l_name} on your left and {r_name} on your right. Center corridor is clear."
+        return f"There is {l_name} on your left and {r_name} on your right. Center corridor is open."
     else:
         return f"Obstacles ahead on left and right. Path blocked, please stop."
 

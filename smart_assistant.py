@@ -632,9 +632,11 @@ class AssistiveAlertManager:
        it is NOT pronounced again as long as it remains present in view.
     2. Dynamic Approach Exception: If a previously announced stationary object begins actively
        approaching towards the user (is_approaching=True), a caution alert is triggered.
-    3. Emergency Distance Safety: Immediate stop warning if distance drops to <0.40m.
-    4. Instant On-Demand Query: Tactile button press triggers an immediate full scan at any time.
-    5. Confirmed Path Clear: Requires continuous clear frames before announcing 'Path clear ahead'.
+    3. Emergency Distance Safety: Immediate stop warning if distance drops to <0.50m (gives blind users safe reaction time).
+    4. First-Class Sonar Fusion: Forward obstacles (walls, doors, pillars) detected by ultrasonic (<1.8m)
+       are fully integrated into navigation even if camera detects no bounding box.
+    5. Safe Clear Path: 'Path clear ahead' is ONLY spoken when both camera has 0 obstacles AND ultrasonic confirms distance >= 1.8m.
+    6. Instant On-Demand Query: Tactile button press triggers an immediate full scan at any time.
     """
     def __init__(self, change_debounce=1.8, clear_delay=3.0, post_speech_cooldown=2.5, emergency_cooldown=1.8):
         self.change_debounce = change_debounce
@@ -657,13 +659,17 @@ class AssistiveAlertManager:
         
         self.clear_start_time = None
 
-    def _make_sig(self, detections, emergency=False):
+    def _make_sig(self, detections, distance_meters=None, emergency=False):
         # Stable semantic signature: object class and track_id (or col fallback)
         sig_items = []
         for d in detections:
             tid = d.get("track_id", d.get("col", "middle"))
             sig_items.append((d["class"], tid))
-        return tuple(sorted(sig_items)) + (emergency,)
+        # Quantize sonar distance into 35cm bands to prevent repetitive voice spam for stationary obstacles
+        sonar_band = None
+        if distance_meters is not None and 0.02 <= distance_meters < 1.8:
+            sonar_band = int(distance_meters // 0.35)
+        return tuple(sorted(sig_items)) + (sonar_band, emergency)
 
     def evaluate(self, detections, distance_meters, button_pressed):
         now = time.time()
@@ -684,23 +690,23 @@ class AssistiveAlertManager:
         if button_pressed:
             announcement = format_spatial_announcement(detections, distance_meters=distance_meters, is_full_scan=True)
             self.last_spoken_time = now
-            self.last_spoken_sig = self._make_sig(detections)
+            self.last_spoken_sig = self._make_sig(detections, distance_meters=distance_meters)
             self.last_spoken_text = announcement
             self.announced_track_ids.update(current_track_ids)
             self.candidate_sig = None
             self.clear_start_time = None
             return True, announcement, "Tactile Button Pressed (Full Surroundings Scan)"
 
-        # 2. Critical Safety Proximity (< 0.40m = 40 cm Stop Hazard)
-        is_critical_close = (distance_meters is not None and 0.02 <= distance_meters < 0.40)
+        # 2. Critical Safety Proximity (< 0.50m = 50 cm Stop Hazard for Walking Reaction Time)
+        is_critical_close = (distance_meters is not None and 0.02 <= distance_meters < 0.50)
         if is_critical_close:
             if is_currently_speaking:
                 return False, None, None
-            # Only repeat if distance dropped significantly (>= 15cm closer) or initial trigger
-            if self.last_emergency_dist is None or (self.last_emergency_dist - distance_meters >= 0.15):
+            # Only repeat if distance dropped significantly (>= 12cm closer) or initial trigger
+            if self.last_emergency_dist is None or (self.last_emergency_dist - distance_meters >= 0.12):
                 announcement = format_spatial_announcement(detections, distance_meters=distance_meters)
                 self.last_spoken_time = now
-                self.last_spoken_sig = self._make_sig(detections, emergency=True)
+                self.last_spoken_sig = self._make_sig(detections, distance_meters=distance_meters, emergency=True)
                 self.last_spoken_text = announcement
                 self.last_emergency_dist = distance_meters
                 return True, announcement, f"Critical Proximity Stop ({distance_meters*100:.0f}cm)"
@@ -719,7 +725,7 @@ class AssistiveAlertManager:
             
             announcement = format_spatial_announcement(detections, distance_meters=distance_meters)
             self.last_spoken_time = now
-            self.last_spoken_sig = self._make_sig(detections, emergency=True)
+            self.last_spoken_sig = self._make_sig(detections, distance_meters=distance_meters, emergency=True)
             self.last_spoken_text = announcement
             for d in newly_approaching:
                 if d.get("track_id") is not None:
@@ -731,15 +737,18 @@ class AssistiveAlertManager:
         if is_currently_speaking or time_since_finished < self.post_speech_cooldown:
             return False, None, None
 
-        # 5. Obstacles in view (Standard navigation)
-        if len(detections) > 0:
+        # 5. Obstacles in view (Camera detections OR Forward Ultrasonic Radar < 1.8m)
+        sonar_obstacle_ahead = (distance_meters is not None and 0.02 <= distance_meters < 1.8)
+        has_obstacles = (len(detections) > 0) or sonar_obstacle_ahead
+
+        if has_obstacles:
             self.clear_start_time = None
-            current_sig = self._make_sig(detections)
+            current_sig = self._make_sig(detections, distance_meters=distance_meters)
             
             # Find any unannounced tracks in view
             unannounced = [d for d in detections if d.get("track_id") is not None and d.get("track_id") not in self.announced_track_ids]
             
-            # If all objects in view have ALREADY been announced and signature hasn't changed:
+            # If all objects in view (and sonar band) have ALREADY been announced and signature hasn't changed:
             # STRICT ZERO REPETITION: Do NOT pronounce again!
             if not unannounced and current_sig == self.last_spoken_sig:
                 return False, None, None
@@ -758,12 +767,12 @@ class AssistiveAlertManager:
                     self.last_spoken_text = self.candidate_text
                     self.candidate_sig = None
                     self.announced_track_ids.update(current_track_ids)
-                    main_cls = detections[0]['class']
-                    main_dir = detections[0].get('direction', 'ahead')
-                    return True, self.candidate_text, f"New Obstacle Identified ({main_cls} {main_dir})"
+                    obs_name = detections[0]['class'] if detections else "obstacle"
+                    obs_dir = detections[0].get('direction', 'ahead') if detections else "ahead"
+                    return True, self.candidate_text, f"New Obstacle Identified ({obs_name} {obs_dir})"
                 return False, None, None
 
-        # 6. Path is clear (len(detections) == 0 and distance >= 1.0m)
+        # 6. Path is clear (len(detections) == 0 AND distance >= 1.8m or disconnected)
         self.candidate_sig = None
         if self.last_spoken_sig is not None and self.last_spoken_sig != () and self.last_spoken_sig != (False,):
             # Path was previously blocked! Wait for clear_delay to avoid flutter
@@ -777,24 +786,10 @@ class AssistiveAlertManager:
                 self.last_spoken_text = clear_msg
                 self.announced_track_ids.clear()
                 self.announced_approaches.clear()
+                self.clear_start_time = None
                 return True, clear_msg, "Clear Path Navigation Update"
             return False, None, None
 
-        return False, None, None
-        self.candidate_sig = None
-        if self.last_spoken_sig is not None and self.last_spoken_sig != () and self.last_spoken_sig != (False,):
-            # Path was previously blocked! Wait for clear_delay to avoid flutter
-            if self.clear_start_time is None:
-                self.clear_start_time = now
-                return False, None, None
-            elif now - self.clear_start_time >= self.clear_delay:
-                clear_msg = "Path clear ahead. Continue straight."
-                self.last_spoken_time = now
-                self.last_spoken_sig = ()
-                self.last_spoken_text = clear_msg
-                self.clear_start_time = None
-                return True, clear_msg, "Clear Path Confirmed"
-        
         return False, None, None
 
 
@@ -860,6 +855,9 @@ def main():
     parser.add_argument("--no-sonar", action="store_true", help="Disable ultrasonic sensor for pure high-speed camera mode")
     parser.add_argument("--no-telemetry", action="store_true", help="Disable live terminal image processing telemetry")
     args = parser.parse_args()
+
+    # Immediate audio confirmation for visually impaired user: hardware is powering up
+    speak("Starting smart vision assistant. Please wait.")
 
     # Initialize GPIO Sensors with configured pins (or skip sonar if --no-sonar)
     init_sensors(
@@ -935,10 +933,10 @@ def main():
         time.sleep(3.5)
         sys.exit(1)
 
-    startup_msg = "Smart vision assistant ready. Obstacle radar active."
+    startup_msg = "Smart vision assistant ready. Push button anytime for full scan."
     speak(startup_msg)
 
-    alert_manager = AssistiveAlertManager(persistent_cooldown=25.0, change_debounce=1.8, clear_delay=3.5)
+    alert_manager = AssistiveAlertManager(change_debounce=1.8, clear_delay=3.0)
     last_button_time = 0.0
     last_valid_frame_time = time.time()
     camera_lost_alerted = False

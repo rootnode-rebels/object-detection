@@ -102,6 +102,26 @@ assert _sonar_latest_filter([None]) == 1.0, "Timeout None should return 1.0 (cle
 assert round(_sonar_latest_filter([0.5, 0.1]) * 3.0, 2) == 0.30, "Latest echo should take priority immediately"
 print("  PASS: Zero-hysteresis filter correctly resets on timeout (no 2.0m freeze).")
 
+# 6. Test Blind Safety Protections (Sonar Wall Fusion, Centimeter Phrasing, 50cm Stop)
+print("\n[TEST 6] Blind User Safety Features & Human Phrasing...")
+# A. Obstacle at 1.2m with ZERO camera detections (e.g. flat wall/door)
+ann_wall = format_spatial_announcement([], distance_meters=1.2)
+assert "Path clear" not in ann_wall, f"DANGEROUS: Spoke clear path when wall is at 1.2m! Got: {ann_wall}"
+assert "obstacle" in ann_wall.lower() and "1.2 meters" in ann_wall, f"Expected obstacle at 1.2m, got: {ann_wall}"
+print(f"  PASS: Sonar wall with 0 camera detections correctly warns user: \"{ann_wall}\"")
+
+# B. Centimeter phrasing under 1 meter
+ann_cm = format_spatial_announcement([], distance_meters=0.45)
+assert "45 centimeters" in ann_cm, f"Expected '45 centimeters', got: {ann_cm}"
+assert "Stop!" in ann_cm, f"Expected emergency stop at 45cm (<50cm), got: {ann_cm}"
+print(f"  PASS: Centimeter natural phrasing & 50cm stop verified: \"{ann_cm}\"")
+
+# C. Button full surroundings scan with sonar wall
+ann_scan = format_spatial_announcement([], distance_meters=1.3, is_full_scan=True)
+assert "Path is completely clear" not in ann_scan, f"DANGEROUS: Full scan said clear path with wall at 1.3m! Got: {ann_scan}"
+assert "obstacle" in ann_scan.lower(), f"Expected obstacle in full scan, got: {ann_scan}"
+print(f"  PASS: Full surroundings scan includes sonar wall: \"{ann_scan}\"")
+
 print("\n" + "=" * 65)
-print("  >>> ALL 5 SUBSYSTEM TESTS PASSED WITH 100% SUCCESS! <<<")
+print("  >>> ALL 6 BLIND-ASSISTIVE SUBSYSTEM TESTS PASSED! <<<")
 print("=" * 65)
