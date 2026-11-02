@@ -640,7 +640,11 @@ def main():
             min_post_pause = 1.8 if is_emergency else 2.5
             pacing_ready = (not is_speaking) and (time_since_finished >= min_post_pause)
 
-            should_alert = manual_trigger or (pacing_ready and state_changed and (is_emergency or time_since > 2.0))
+            # Emergency stops (<0.50m) and approaching hazards preempt casual speech immediately!
+            if is_emergency and state_changed:
+                should_alert = True
+            else:
+                should_alert = manual_trigger or (pacing_ready and state_changed and time_since > 1.8)
 
             if should_alert:
                 current_announcement = candidate_announcement
@@ -661,7 +665,7 @@ def main():
                     trigger_reason = "Clear Path Navigation Update"
 
                 print(f"\n[TRIGGER] {trigger_reason} -> \"{current_announcement}\"")
-                voice.speak(current_announcement, force=manual_trigger)
+                voice.speak(current_announcement, force=(manual_trigger or is_emergency))
                 last_scan_time = current_time
 
             # ---------------------------------------------

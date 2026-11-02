@@ -102,7 +102,7 @@ assert _sonar_latest_filter([None]) == 1.0, "Timeout None should return 1.0 (cle
 assert round(_sonar_latest_filter([0.5, 0.1]) * 3.0, 2) == 0.30, "Latest echo should take priority immediately"
 print("  PASS: Zero-hysteresis filter correctly resets on timeout (no 2.0m freeze).")
 
-# 6. Test Blind Safety Protections (Sonar Wall Fusion, Centimeter Phrasing, 50cm Stop)
+# 6. Test Blind Safety Protections (Sonar Wall Fusion, Centimeter Phrasing, 50cm Stop, Preemption)
 print("\n[TEST 6] Blind User Safety Features & Human Phrasing...")
 # A. Obstacle at 1.2m with ZERO camera detections (e.g. flat wall/door)
 ann_wall = format_spatial_announcement([], distance_meters=1.2)
@@ -121,6 +121,26 @@ ann_scan = format_spatial_announcement([], distance_meters=1.3, is_full_scan=Tru
 assert "Path is completely clear" not in ann_scan, f"DANGEROUS: Full scan said clear path with wall at 1.3m! Got: {ann_scan}"
 assert "obstacle" in ann_scan.lower(), f"Expected obstacle in full scan, got: {ann_scan}"
 print(f"  PASS: Full surroundings scan includes sonar wall: \"{ann_scan}\"")
+
+# D. Emergency Preemption Flag
+alert_mgr2 = AssistiveAlertManager()
+r_emg, txt_emg, _ = alert_mgr2.evaluate([], 0.35, False)
+assert r_emg is True and alert_mgr2.is_last_emergency is True, "Emergency stop must flag preemption (is_last_emergency=True)"
+print(f"  PASS: Emergency preemption flag active: \"{txt_emg}\"")
+
+# E. Head Swivel Grace Period (TTL)
+alert_mgr3 = AssistiveAlertManager(change_debounce=0.05, track_ttl=3.0)
+det_person = [{'class': 'person', 'track_id': 99, 'col': 'middle', 'is_approaching': False}]
+alert_mgr3.evaluate(det_person, 2.0, False)
+time.sleep(0.08)
+alert_mgr3.evaluate(det_person, 2.0, False) # Announced
+# Blind user swivels head away (empty camera frame for 1.0s)
+alert_mgr3.evaluate([], 2.5, False)
+time.sleep(1.0)
+# Blind user swivels back towards the same person
+r_swivel, _, _ = alert_mgr3.evaluate(det_person, 2.0, False)
+assert r_swivel is False, "Head swivel within TTL should NOT re-announce the same stationary person!"
+print("  PASS: Head swivel grace period verified (0 re-announcements after momentary turn).")
 
 print("\n" + "=" * 65)
 print("  >>> ALL 6 BLIND-ASSISTIVE SUBSYSTEM TESTS PASSED! <<<")
