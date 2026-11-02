@@ -770,6 +770,49 @@ class AssistiveAlertManager:
         return False, None, None
 
 
+def print_cv_image_telemetry(frame, detections, current_fps, distance_meters, resolution=320, inference_ms=None):
+    """
+    Renders live Computer Vision and Image Processing telemetry directly in the terminal.
+    Shows input frame resolution, letterbox tensor shape, inference latency, bounding boxes [X, Y, W, H],
+    confidence scores, and a 3-zone spatial radar without saving any image files to disk.
+    """
+    h, w = frame.shape[:2]
+    dist_str = f"{distance_meters:.2f}m" if (distance_meters is not None and 0.0 < distance_meters < 3.0) else "Clear (>3.0m)"
+    inf_str = f"{inference_ms:.1f} ms" if inference_ms else f"~{1000.0 / max(1.0, current_fps):.1f} ms"
+
+    print("\n" + "=" * 76)
+    print(f" [CV IMAGE PROCESSING PIPELINE] | Frame: {w}x{h} -> Tensor: (1x3x{resolution}x{resolution})")
+    print(f" Latency: {inf_str} (CPU DNN) | Rate: {current_fps:.1f} FPS | Sonar: {dist_str}")
+    print("-" * 76)
+
+    if detections:
+        print(f" Detected Objects ({len(detections)} bounding boxes via OpenCV NMS):")
+        for d in detections[:4]:
+            box = d["box"]
+            bw = box[2] - box[0]
+            bh = box[3] - box[1]
+            c_name = d["class"].upper()
+            conf = int(d["confidence"] * 100)
+            z = d.get("zone", "middle-center").upper()
+            v_dist = f"{d['visual_distance']:.1f}m" if d.get("visual_distance") else "N/A"
+            app = " [APPROACHING!]" if d.get("is_approaching") else ""
+            print(f"   * {c_name:<12} | Conf: {conf:>2}% | Box: [X:{box[0]:<3} Y:{box[1]:<3} W:{bw:<3} H:{bh:<3}] | Zone: {z:<13} | Dist: {v_dist}{app}")
+    else:
+        print(" Detection Status : Path clear ahead. No bounding boxes above threshold.")
+
+    left_objs = [d["class"].upper() for d in detections if "left" in d.get("zone", "").lower()]
+    mid_objs = [d["class"].upper() for d in detections if ("center" in d.get("zone", "").lower() or "ahead" in d.get("zone", "").lower() or d.get("zone", "").lower() in ["middle", "center", "middle-center", "top-middle", "bottom-middle"]) and "left" not in d.get("zone", "").lower() and "right" not in d.get("zone", "").lower()]
+    right_objs = [d["class"].upper() for d in detections if "right" in d.get("zone", "").lower()]
+
+    l_txt = left_objs[0] if left_objs else "CLEAR"
+    m_txt = mid_objs[0] if mid_objs else "CLEAR"
+    r_txt = right_objs[0] if right_objs else "CLEAR"
+
+    print("-" * 76)
+    print(f" [SPATIAL RADAR]:  [ LEFT: {l_txt} ]  ---  [ CENTER: {m_txt} ]  ---  [ RIGHT: {r_txt} ]")
+    print("=" * 76)
+
+
 # ==========================================
 # 5. MAIN APPLICATION
 # ==========================================
@@ -787,6 +830,7 @@ def main():
     parser.add_argument("--echo-pin", type=int, default=24, help="HC-SR04 echo GPIO pin (default: 24)")
     parser.add_argument("--button-pin", type=int, default=17, help="Tactile push button GPIO pin (default: 17)")
     parser.add_argument("--no-sonar", action="store_true", help="Disable ultrasonic sensor for pure high-speed camera mode")
+    parser.add_argument("--no-telemetry", action="store_true", help="Disable live terminal image processing telemetry")
     args = parser.parse_args()
 
     # Initialize GPIO Sensors with configured pins (or skip sonar if --no-sonar)
@@ -913,15 +957,13 @@ def main():
             detections = detector.detect(frame, distance_meters=distance_meters, filter_unconfirmed=True)
             has_approaching = any(d.get("is_approaching", False) for d in detections)
 
-            # Live Terminal Scanning Feedback every 1.5 seconds so user always sees camera is alive
+            # Live Terminal Image Processing Feedback (every 1.5 seconds)
             if not hasattr(main, '_last_print_time'):
                 main._last_print_time = 0.0
             if time.time() - main._last_print_time > 1.5:
-                if detections:
-                    det_summary = ", ".join([f"{d['class']} ({d['confidence']*100:.0f}%)" for d in detections])
-                    print(f"[LIVE SCAN] FPS: {current_fps:.1f} | Detections: [{det_summary}]")
-                else:
-                    print(f"[LIVE SCAN] FPS: {current_fps:.1f} | Scanning... Path clear ahead")
+                if not args.no_telemetry:
+                    inf_ms = getattr(detector, 'last_inference_ms', None)
+                    print_cv_image_telemetry(frame, detections, current_fps, distance_meters, args.resolution, inf_ms)
                 main._last_print_time = time.time()
 
             # Evaluate assistive alert state (anti-repetition, stateful debouncing & clear path confirmation)

@@ -463,6 +463,7 @@ class YOLODetector:
         if frame is None or self.net is None:
             return []
 
+        t0 = time.time()
         orig_h, orig_w = frame.shape[:2]
         target_w, target_h = self.input_size
 
@@ -619,6 +620,7 @@ class YOLODetector:
         detections = self.tracker.update(detections, distance_meters=distance_meters)
         if filter_unconfirmed:
             detections = [d for d in detections if d.get("is_confirmed", False)]
+        self.last_inference_ms = (time.time() - t0) * 1000.0
         return detections
 
     def close(self):
