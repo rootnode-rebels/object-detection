@@ -353,7 +353,7 @@ class ApproachTracker:
                 }
                 det["track_id"] = tid
                 det["hits"] = 1
-                det["is_confirmed"] = is_approaching or (distance_meters is not None and 0.0 < distance_meters < 1.0)
+                det["is_confirmed"] = bool(distance_meters is not None and 0.0 < distance_meters < 1.0)
                 det["is_approaching"] = False
                 det["approach_speed"] = None
                 det["growth_rate"] = 0.0
@@ -667,15 +667,15 @@ def format_spatial_announcement(detections, distance_meters=None, target_zone=No
     # 2. Monocular pinhole geometry provides real-world visual distance estimation when unplugged or for lateral objects.
     def _get_item_dist_str(items, is_center=False):
         if is_center and distance_meters is not None and 0.0 < distance_meters < 3.0:
-            return f" at {distance_meters:.1f} meters"
+            return f", at {distance_meters:.1f} meters"
         if items and items[0].get("visual_distance") is not None:
             vd = items[0]["visual_distance"]
             if vd <= 5.0:
                 if is_center and distance_meters is not None and 0.0 < distance_meters < 3.0:
-                    return f" at {distance_meters:.1f} meters"
-                return f" at about {vd:.1f} meters"
+                    return f", at {distance_meters:.1f} meters"
+                return f", at about {vd:.1f} meters"
         elif is_center and distance_meters is not None and 0.0 < distance_meters < 3.0:
-            return f" at {distance_meters:.1f} meters"
+            return f", at {distance_meters:.1f} meters"
         return ""
 
     # Natural English item formatter (handles articles 'a', 'an', plurals)

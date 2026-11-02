@@ -349,11 +349,11 @@ class SpeechCoordinator:
             pass
 
     def _play_linux(self, clean_text):
-        # Calm, steady 130 words/minute (-s130) with natural US English voice (-ven-us) prevents fast chipmunk voice
+        # Calm, steady 110 words/minute (-s110) with 120ms word gaps (-g12) and relaxed pitch (-p45)
         for engine in ['espeak-ng', 'espeak']:
             try:
                 proc = subprocess.Popen(
-                    [engine, '-ven-us', '-s130', '-p48', clean_text],
+                    [engine, '-ven-us', '-s110', '-g12', '-p45', clean_text],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL
                 )
@@ -911,6 +911,7 @@ def main():
 
             # Run YOLOv8 detection on CPU with multi-frame approach tracking and temporal confirmation
             detections = detector.detect(frame, distance_meters=distance_meters, filter_unconfirmed=True)
+            has_approaching = any(d.get("is_approaching", False) for d in detections)
 
             # Live Terminal Scanning Feedback every 1.5 seconds so user always sees camera is alive
             if not hasattr(main, '_last_print_time'):

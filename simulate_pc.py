@@ -143,11 +143,11 @@ class VoiceSynthesizer:
                 except Exception:
                     pass
 
-            # Linux espeak command with steady 130 wpm
+            # Linux espeak command with steady 110 wpm and 120ms word gap
             else:
                 for eng in ['espeak-ng', 'espeak']:
                     try:
-                        subprocess.run([eng, "-ven-us", "-s130", "-p48", clean_text], capture_output=True, timeout=12)
+                        subprocess.run([eng, "-ven-us", "-s110", "-g12", "-p45", clean_text], capture_output=True, timeout=12)
                         return
                     except Exception:
                         pass

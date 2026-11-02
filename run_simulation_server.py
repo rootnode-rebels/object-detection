@@ -83,7 +83,7 @@ class VoiceSynthesizer:
                 import subprocess
                 for eng in ['espeak-ng', 'espeak']:
                     try:
-                        subprocess.run([eng, "-ven-us", "-s130", "-p48", clean_text], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        subprocess.run([eng, "-ven-us", "-s110", "-g12", "-p45", clean_text], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                         return
                     except Exception:
                         pass
