@@ -63,31 +63,33 @@ sonar_reading = 3.0
 sonar_thread = None
 sonar_thread_running = False
 
+def _sonar_latest_filter(queue):
+    """
+    Zero-hysteresis filter for HC-SR04 sonar queue.
+    Prevents gpiozero from holding stale distances on open space or when an obstacle moves.
+    """
+    if not queue:
+        return 1.0  # 1.0 * max_distance = 3.0m (clear)
+    latest = queue[-1]
+    if latest is None:
+        return 1.0  # Echo timed out or open space -> immediately clear
+    return latest
+
 def _sonar_worker():
     """Background daemon thread to poll ultrasonic sensor without blocking the camera vision loop."""
     global sensor, sonar_reading, sonar_disabled, sonar_thread_running
-    buf = []
     while sonar_thread_running and sensor is not None:
         try:
-            with warnings.catch_warnings(record=True) as w:
-                warnings.simplefilter("always")
-                d = sensor.distance
-                has_no_echo = any("no echo" in str(item.message).lower() for item in w)
-                if has_no_echo or d is None or d >= 3.0:
-                    # Normal out-of-range (>3m) or clear open space
-                    sonar_reading = 3.0
-                    buf.clear()
-                else:
-                    if 0.02 <= d <= 3.0:
-                        buf.append(d)
-                        if len(buf) > 3:
-                            buf.pop(0)
-                        # Median of 3 pings eliminates CPU jitter / scheduling spikes
-                        sonar_reading = round(float(sorted(buf)[len(buf) // 2]), 2)
-                        sonar_disabled = False
+            d = sensor.distance
+            if d is None or d >= 2.95:
+                # Normal out-of-range (>3m) or clear open space
+                sonar_reading = 3.0
+            elif 0.02 <= d < 2.95:
+                sonar_reading = round(float(d), 2)
+                sonar_disabled = False
         except Exception:
-            time.sleep(0.05)
-        time.sleep(0.06)  # Sample at ~16 Hz asynchronously
+            time.sleep(0.04)
+        time.sleep(0.05)  # Sample at ~20 Hz asynchronously
 
 def init_sensors(trigger_pin=23, echo_pin=24, button_pin=17, enable_sonar=True):
     """
@@ -117,7 +119,21 @@ def init_sensors(trigger_pin=23, echo_pin=24, button_pin=17, enable_sonar=True):
 
     if enable_sonar:
         try:
-            candidate_sensor = DistanceSensor(echo=PIN_ECHO, trigger=PIN_TRIGGER, max_distance=3.0)
+            candidate_sensor = DistanceSensor(
+                echo=PIN_ECHO,
+                trigger=PIN_TRIGGER,
+                max_distance=3.0,
+                queue_len=2,
+                partial=True
+            )
+            # Crucial gpiozero fix:
+            # By default, gpiozero ignores None (ignore=frozenset({None})), which permanently
+            # locks the sensor queue to old readings (e.g. 2.0m) whenever an echo is missed!
+            # Clearing ignore and using _sonar_latest_filter ensures immediate, zero-lag updates.
+            if hasattr(candidate_sensor, '_queue') and candidate_sensor._queue is not None:
+                candidate_sensor._queue.ignore = frozenset()
+                candidate_sensor._queue.average = _sonar_latest_filter
+
             sensor = candidate_sensor
             sonar_disabled = False
             sonar_reading = 3.0

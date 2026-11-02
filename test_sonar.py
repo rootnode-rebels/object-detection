@@ -84,7 +84,10 @@ def test_raspberry_pi_gpio(trigger_pin, echo_pin, temp_c=22.0, sample_rate_hz=12
     sensor = None
     try:
         from gpiozero import DistanceSensor
-        sensor = DistanceSensor(echo=echo_pin, trigger=trigger_pin, max_distance=3.0)
+        sensor = DistanceSensor(echo=echo_pin, trigger=trigger_pin, max_distance=3.0, queue_len=2, partial=True)
+        if hasattr(sensor, '_queue') and sensor._queue is not None:
+            sensor._queue.ignore = frozenset()
+            sensor._queue.average = lambda q: 1.0 if not q or q[-1] is None else q[-1]
     except ImportError:
         print("[FAIL] 'gpiozero' is not installed.")
         print("       Install on Raspberry Pi OS via: sudo apt install python3-gpiozero python3-lgpio -y")
