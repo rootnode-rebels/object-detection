@@ -303,6 +303,49 @@ def play_sonar_beep(dist, is_muted=False):
             threading.Thread(target=_beep_worker, daemon=True).start()
 
 
+def print_cv_image_telemetry(frame, detections, current_fps, distance_meters, resolution=320, inference_ms=None):
+    """
+    Renders live Computer Vision and Image Processing telemetry directly in the terminal.
+    Shows input frame resolution, letterbox tensor shape, inference latency, bounding boxes [X, Y, W, H],
+    confidence scores, and a 3-zone spatial radar without saving any image files to disk.
+    """
+    h, w = frame.shape[:2]
+    dist_str = f"{distance_meters:.2f}m" if (distance_meters is not None and 0.0 < distance_meters < 3.0) else "Clear (>3.0m)"
+    inf_str = f"{inference_ms:.1f} ms" if inference_ms else f"~{1000.0 / max(1.0, current_fps):.1f} ms"
+
+    print("\n" + "=" * 76)
+    print(f" [CV IMAGE PROCESSING PIPELINE] | Frame: {w}x{h} -> Tensor: (1x3x{resolution}x{resolution})")
+    print(f" Latency: {inf_str} (CPU DNN) | Rate: {current_fps:.1f} FPS | Sonar: {dist_str}")
+    print("-" * 76)
+
+    if detections:
+        print(f" Detected Objects ({len(detections)} bounding boxes via OpenCV NMS):")
+        for d in detections[:4]:
+            box = d["box"]
+            bw = box[2] - box[0]
+            bh = box[3] - box[1]
+            c_name = d["class"].upper()
+            conf = int(d["confidence"] * 100)
+            z = d.get("zone", "middle-center").upper()
+            v_dist = f"{d['visual_distance']:.1f}m" if d.get("visual_distance") else "N/A"
+            app = " [APPROACHING!]" if d.get("is_approaching") else ""
+            print(f"   * {c_name:<12} | Conf: {conf:>2}% | Box: [X:{box[0]:<3} Y:{box[1]:<3} W:{bw:<3} H:{bh:<3}] | Zone: {z:<13} | Dist: {v_dist}{app}")
+    else:
+        print(" Detection Status : Path clear ahead. No bounding boxes above threshold.")
+
+    left_objs = [d["class"].upper() for d in detections if "left" in d.get("zone", "").lower()]
+    mid_objs = [d["class"].upper() for d in detections if ("center" in d.get("zone", "").lower() or "ahead" in d.get("zone", "").lower() or d.get("zone", "").lower() in ["middle", "center", "middle-center", "top-middle", "bottom-middle"]) and "left" not in d.get("zone", "").lower() and "right" not in d.get("zone", "").lower()]
+    right_objs = [d["class"].upper() for d in detections if "right" in d.get("zone", "").lower()]
+
+    l_txt = left_objs[0] if left_objs else "CLEAR"
+    m_txt = mid_objs[0] if mid_objs else "CLEAR"
+    r_txt = right_objs[0] if right_objs else "CLEAR"
+
+    print("-" * 76)
+    print(f" [SPATIAL RADAR]:  [ LEFT: {l_txt} ]  ---  [ CENTER: {m_txt} ]  ---  [ RIGHT: {r_txt} ]")
+    print("=" * 76)
+
+
 # ==========================================
 # 3. PC SIMULATOR APPLICATION
 # ==========================================
@@ -402,6 +445,7 @@ def main():
     radar_angle = 0
     sonar_beep_muted = False
     last_scan_time = time.time()
+    last_telemetry_time = 0
     COOLDOWN = 3.0
     current_announcement = "Simulation Ready. Automatic obstacle detection active."
 
@@ -578,6 +622,12 @@ def main():
                 distance_meters=distance_meters,
                 target_zone=target_sector
             )
+
+            # Live CV Image Processing Terminal Telemetry (every ~1.5s)
+            if current_time - last_telemetry_time >= 1.5:
+                inf_ms = getattr(detector, 'last_inference_ms', None) if detector else None
+                print_cv_image_telemetry(frame, detections, fps, distance_meters, args.resolution, inf_ms)
+                last_telemetry_time = current_time
 
             # Speak automatically on obstacle detection, zone change, clear-path update, or manual trigger
             time_since = current_time - last_scan_time
