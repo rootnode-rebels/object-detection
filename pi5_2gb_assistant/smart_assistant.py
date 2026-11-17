@@ -58,52 +58,75 @@ PIN_BUTTON = 17
 
 sensor = None
 button = None
-sonar_disabled = True
-sonar_reading = 3.0
+sonar_connected = False
+sonar_reading = None
 sonar_thread = None
 sonar_thread_running = False
 
 def _sonar_latest_filter(queue):
     """
     Zero-hysteresis filter for HC-SR04 sonar queue.
-    Prevents gpiozero from holding stale distances on open space or when an obstacle moves.
+    Returns latest reading or None if echo timed out / disconnected.
     """
     if not queue:
-        return 1.0  # 1.0 * max_distance = 3.0m (clear)
-    latest = queue[-1]
-    if latest is None:
-        return 1.0  # Echo timed out or open space -> immediately clear
-    return latest
+        return None
+    return queue[-1]
 
 def _sonar_worker():
-    """Background daemon thread to poll ultrasonic sensor without blocking the camera vision loop."""
-    global sensor, sonar_reading, sonar_disabled, sonar_thread_running
+    """
+    Background daemon thread to continuously poll physical ultrasonic sensor (HC-SR04).
+    STRICT HARDWARE RULE:
+    - If obstacle or hand is detected (0.02m to 2.98m): updates live distance, marks sensor connected.
+    - If clear open room (>3.0m): reports 3.0m clear, marks sensor connected.
+    - If wire is unplugged, echo missing, or sensor offline: marks DISCONNECTED, sets distance to None.
+    """
+    global sensor, sonar_reading, sonar_connected, sonar_thread_running
+    consecutive_timeouts = 0
+
     while sonar_thread_running and sensor is not None:
         try:
             d = sensor.distance
-            if d is None or d >= 2.95:
-                # Normal out-of-range (>3m) or clear open space
-                sonar_reading = 3.0
-            elif 0.02 <= d < 2.95:
+            # In gpiozero, distance returns float (meters) or None on echo timeout / wire disconnection
+            if d is not None and 0.02 <= d < 2.98:
+                # Valid physical reflection received from obstacle, wall, or hand
                 sonar_reading = round(float(d), 2)
-                sonar_disabled = False
+                sonar_connected = True
+                consecutive_timeouts = 0
+            elif d is not None and d >= 2.98:
+                # Sensor pinged into open space (>3m clear)
+                sonar_reading = 3.0
+                sonar_connected = True
+                consecutive_timeouts = 0
+            else:
+                # d is None -> No echo returned or sensor wire disconnected
+                consecutive_timeouts += 1
+                if consecutive_timeouts >= 3:
+                    # After 3 consecutive timeouts (~150ms), sensor is disconnected
+                    sonar_reading = None
+                    sonar_connected = False
         except Exception:
+            consecutive_timeouts += 1
+            if consecutive_timeouts >= 3:
+                sonar_reading = None
+                sonar_connected = False
             time.sleep(0.04)
-        time.sleep(0.05)  # Sample at ~20 Hz asynchronously
+
+        time.sleep(0.04)  # ~25 Hz ping rate
 
 def init_sensors(trigger_pin=23, echo_pin=24, button_pin=17, enable_sonar=True):
     """
     Initializes hardware GPIO sensors (HC-SR04 ultrasonic distance sensor & tactile button).
-    Keeps sensor active continuously without falsely disabling on clear room startup.
+    STRICT RULE: Distance is ONLY enabled if a verified physical sensor is connected.
     """
-    global sensor, button, PIN_TRIGGER, PIN_ECHO, PIN_BUTTON, sonar_disabled, sonar_reading, sonar_thread, sonar_thread_running
+    global sensor, button, PIN_TRIGGER, PIN_ECHO, PIN_BUTTON, sonar_connected, sonar_reading, sonar_thread, sonar_thread_running
     PIN_TRIGGER = trigger_pin
     PIN_ECHO = echo_pin
     PIN_BUTTON = button_pin
 
     if not GPIO_AVAILABLE:
-        print("[INFO] GPIO unavailable. Running in desktop/simulation mode.")
-        sonar_disabled = True
+        print("[INFO] GPIO unavailable. Hardware distance sensor disabled (Desktop/Simulation mode).")
+        sonar_connected = False
+        sonar_reading = None
         return
 
     if sensor is not None:
@@ -126,28 +149,28 @@ def init_sensors(trigger_pin=23, echo_pin=24, button_pin=17, enable_sonar=True):
                 queue_len=2,
                 partial=True
             )
-            # Crucial gpiozero fix:
-            # By default, gpiozero ignores None (ignore=frozenset({None})), which permanently
-            # locks the sensor queue to old readings (e.g. 2.0m) whenever an echo is missed!
-            # Clearing ignore and using _sonar_latest_filter ensures immediate, zero-lag updates.
+            # Do NOT artificially convert None to 1.0!
+            # If echo is missing or wire disconnected, None must be preserved so we detect disconnection.
             if hasattr(candidate_sensor, '_queue') and candidate_sensor._queue is not None:
                 candidate_sensor._queue.ignore = frozenset()
-                candidate_sensor._queue.average = _sonar_latest_filter
+                candidate_sensor._queue.average = lambda q: (q[-1] if q else None)
 
             sensor = candidate_sensor
-            sonar_disabled = False
-            sonar_reading = 3.0
+            sonar_connected = False
+            sonar_reading = None
             sonar_thread_running = True
             sonar_thread = threading.Thread(target=_sonar_worker, daemon=True)
             sonar_thread.start()
-            print(f"[INFO] Ultrasonic hardware healthy! Multi-modal radar ACTIVE on Trigger={PIN_TRIGGER}, Echo={PIN_ECHO}.")
+            print(f"[INFO] Ultrasonic hardware initialized on Trigger={PIN_TRIGGER}, Echo={PIN_ECHO}.")
         except Exception as e:
-            print(f"[INFO] Ultrasonic radar offline ({e}). Running vision-only mode.")
+            print(f"[INFO] Ultrasonic radar offline ({e}). Running vision-only mode (No distance).")
             sensor = None
-            sonar_disabled = True
+            sonar_connected = False
+            sonar_reading = None
     else:
         print("[INFO] Ultrasonic radar disabled via --no-sonar flag.")
-        sonar_disabled = True
+        sonar_connected = False
+        sonar_reading = None
 
     try:
         button = Button(PIN_BUTTON, pull_up=True)
@@ -157,10 +180,14 @@ def init_sensors(trigger_pin=23, echo_pin=24, button_pin=17, enable_sonar=True):
         button = None
 
 def get_distance():
-    """Returns the latest ultrasonic distance in O(1) time without blocking the video thread."""
-    global sonar_reading, sonar_disabled
-    if sonar_disabled:
-        return 3.0
+    """
+    Returns the latest physical ultrasonic distance in meters.
+    Returns None if sensor is disconnected, unplugged, or offline.
+    STRICT RULE: The only distance dependency is the physical sensor.
+    """
+    global sonar_reading, sonar_connected
+    if not sonar_connected:
+        return None
     return sonar_reading
 
 def is_button_pressed():
@@ -812,7 +839,14 @@ def print_cv_image_telemetry(frame, detections, current_fps, distance_meters, re
     confidence scores, and a 3-zone spatial radar without saving any image files to disk.
     """
     h, w = frame.shape[:2]
-    dist_str = f"{distance_meters:.2f}m" if (distance_meters is not None and 0.0 < distance_meters < 3.0) else "Clear (>3.0m)"
+    if distance_meters is not None:
+        if distance_meters >= 2.98:
+            dist_str = "Clear (>3.0m)"
+        else:
+            dist_str = f"{distance_meters:.2f}m ({int(round(distance_meters * 100))}cm)"
+    else:
+        dist_str = "DISCONNECTED [No Hardware Sensor]"
+
     inf_str = f"{inference_ms:.1f} ms" if inference_ms else f"~{1000.0 / max(1.0, current_fps):.1f} ms"
 
     print("\n" + "=" * 76)
@@ -829,9 +863,8 @@ def print_cv_image_telemetry(frame, detections, current_fps, distance_meters, re
             c_name = d["class"].upper()
             conf = int(d["confidence"] * 100)
             z = d.get("zone", "middle-center").upper()
-            v_dist = f"{d['visual_distance']:.1f}m" if d.get("visual_distance") else "N/A"
             app = " [APPROACHING!]" if d.get("is_approaching") else ""
-            print(f"   * {c_name:<12} | Conf: {conf:>2}% | Box: [X:{box[0]:<3} Y:{box[1]:<3} W:{bw:<3} H:{bh:<3}] | Zone: {z:<13} | Dist: {v_dist}{app}")
+            print(f"   * {c_name:<14} | Conf: {conf:>2}% | Box: [X:{box[0]:<3} Y:{box[1]:<3} W:{bw:<3} H:{bh:<3}] | Zone: {z:<13}{app}")
     else:
         print(" Detection Status : Path clear ahead. No bounding boxes above threshold.")
 
@@ -1066,8 +1099,24 @@ def main():
                             (10, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (0, 255, 0), 2)
                 cv2.putText(frame, f"FPS: {current_fps:.1f} | CPU: {cpu_load:.0f}% | RAM: {ram_u:.0f}/{ram_t:.0f}MB ({ram_p:.0f}%)",
                             (10, 44), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 2)
-                dist_color = (0, 0, 255) if distance_meters < 1.0 else (0, 255, 255)
-                cv2.putText(frame, f"Distance: {distance_meters:.2f}m",
+                if distance_meters is not None:
+                    if distance_meters < 0.50:
+                        dist_color = (0, 0, 255)  # Red for close hazard
+                        dist_label = f"Distance: {distance_meters:.2f}m ({int(round(distance_meters * 100))}cm) [STOP HAZARD!]"
+                    elif distance_meters < 1.0:
+                        dist_color = (0, 165, 255)  # Orange for caution
+                        dist_label = f"Distance: {distance_meters:.2f}m ({int(round(distance_meters * 100))}cm) [CAUTION]"
+                    elif distance_meters < 2.98:
+                        dist_color = (0, 255, 0)  # Green for clear range
+                        dist_label = f"Distance: {distance_meters:.2f}m ({int(round(distance_meters * 100))}cm)"
+                    else:
+                        dist_color = (0, 255, 180)  # Cyan for open space
+                        dist_label = "Distance: Clear (>3.0m)"
+                else:
+                    dist_color = (0, 0, 255)  # Red warning: Sensor is unplugged / removed
+                    dist_label = "Distance: SENSOR DISCONNECTED [NO HARDWARE]"
+
+                cv2.putText(frame, dist_label,
                             (10, 66), cv2.FONT_HERSHEY_SIMPLEX, 0.52, dist_color, 2)
                 app_badge = "RADAR: APPROACHING HAZARD!" if has_approaching else "RADAR: MONITORING"
                 app_badge_color = (0, 0, 255) if has_approaching else (200, 200, 200)

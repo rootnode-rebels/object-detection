@@ -94,13 +94,13 @@ assert r_clr is True, "Should announce clear path after obstacle leaves"
 assert "Path clear" in text_clr
 print(f"  PASS: Clear path transition: \"{text_clr}\" ({reason_clr})")
 
-# 5. Test _sonar_latest_filter
-print("\n[TEST 5] HC-SR04 Ultrasonic Zero-Hysteresis Filter...")
-from smart_assistant import _sonar_latest_filter
-assert _sonar_latest_filter([]) == 1.0, "Empty queue should return 1.0 (clear)"
-assert _sonar_latest_filter([None]) == 1.0, "Timeout None should return 1.0 (clear)"
+# 5. Test _sonar_latest_filter (Strict Disconnection & Proximity Detection)
+print("\n[TEST 5] HC-SR04 Ultrasonic Strict Disconnection & Zero-Hysteresis Filter...")
+from smart_assistant import _sonar_latest_filter, get_distance
+assert _sonar_latest_filter([]) is None, "Empty queue should return None (no reading)"
+assert _sonar_latest_filter([None]) is None, "Timeout None should return None (disconnected/no echo)"
 assert round(_sonar_latest_filter([0.5, 0.1]) * 3.0, 2) == 0.30, "Latest echo should take priority immediately"
-print("  PASS: Zero-hysteresis filter correctly resets on timeout (no 2.0m freeze).")
+print("  PASS: Sensor disconnect accurately detected as None (never faked as clear).")
 
 # 6. Test Blind Safety Protections (Sonar Wall Fusion, Centimeter Phrasing, 50cm Stop, Preemption)
 print("\n[TEST 6] Blind User Safety Features & Human Phrasing...")

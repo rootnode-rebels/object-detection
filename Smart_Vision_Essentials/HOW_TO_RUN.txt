@@ -1,0 +1,55 @@
+================================================================================
+SMART VISION ASSISTANT FOR VISUALLY IMPAIRED SAFETY
+ESSENTIAL CLIENT RUNTIME PACKAGE
+================================================================================
+
+This package contains ONLY the essential, production-ready files needed to run
+the Smart Vision Assistant. All non-essential training scripts, video renders,
+and HTML generators have been removed for a clean, zero-clutter experience.
+
+--------------------------------------------------------------------------------
+HOW TO RUN ON WINDOWS PC / LAPTOP (WITH WEBCAM)
+--------------------------------------------------------------------------------
+Step 1: Install Required Python Modules (One-Time Setup)
+        - Double-click: INSTALL_MODULES.bat
+        - OR run this command in PowerShell / Terminal:
+          python -m pip install opencv-python numpy psutil pywin32
+
+Step 2: Run the Assistant
+        - Double-click: RUN_ON_PC.bat
+        - (Press 'q' inside the webcam window to exit)
+
+Optional: Model Audit & Benchmark Report
+        - Double-click: RUN_MODEL_AUDIT.bat
+        - Displays dataset provenance (5.8M images), 92 class list, tensor shapes,
+          and a live 50-frame latency/FPS benchmark.
+
+--------------------------------------------------------------------------------
+HOW TO RUN ON RASPBERRY PI 5 (2GB / 4GB / 8GB)
+--------------------------------------------------------------------------------
+Step 1: Install Required System Modules
+        Open terminal in this folder and run:
+        sudo ./setup_rpi.sh
+
+        (Or run manual one-liner:
+        sudo apt update && sudo apt install -y python3-opencv python3-gpiozero python3-psutil python3-numpy python3-lgpio espeak-ng alsa-utils v4l-utils)
+
+Step 2: Start Assistant
+        ./run_rpi.sh
+
+--------------------------------------------------------------------------------
+FILES INCLUDED IN THIS ESSENTIAL PACKAGE:
+--------------------------------------------------------------------------------
+- INSTALL_MODULES.bat      : 1-click module installer for Windows
+- RUN_ON_PC.bat            : 1-click runner for Windows PC with webcam
+- RUN_MODEL_AUDIT.bat      : 1-click technical benchmark and audit report
+- simulate_pc.py           : Full PC simulator with voice guidance & HUD
+- smart_assistant.py       : Core production assistant (auto-detects Pi or PC)
+- yolo_detector.py         : CPU-optimized YOLOv8 OpenCV DNN detection engine
+- show_model_metrics.py    : Technical model verification and benchmark tool
+- classes.txt              : 92 blind-safety custom classes
+- requirements.txt         : Python requirements list
+- setup_rpi.sh             : 1-click automated setup for Raspberry Pi 5
+- run_rpi.sh               : 1-click runner for Raspberry Pi 5
+- model_files/             : Pre-compiled ONNX models (yolov8_assistive_92.onnx)
+================================================================================

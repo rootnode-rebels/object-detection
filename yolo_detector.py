@@ -599,7 +599,9 @@ class YOLODetector:
                     zone = f"{row}-{col}"
                     direction = f"{row_label} {col_label}"
 
-                visual_dist = estimate_visual_distance([x1, y1, x2, y2], class_name, orig_h=orig_h, orig_w=orig_w)
+                # STRICT HARDWARE RULE: Distance is NEVER estimated from camera bounding boxes.
+                # The physical ultrasonic sensor (HC-SR04) is the single source of truth for distance.
+                visual_dist = None
 
                 detections.append({
                     "class": class_name,
@@ -611,7 +613,7 @@ class YOLODetector:
                     "col": col,
                     "center_x": center_x,
                     "center_y": center_y,
-                    "visual_distance": visual_dist
+                    "visual_distance": None
                 })
 
         detections.sort(key=lambda d: d["confidence"], reverse=True)
@@ -665,25 +667,11 @@ def format_spatial_announcement(detections, distance_meters=None, target_zone=No
             approaching_objects.append(d)
 
     # Multi-modal distance fusion helper:
-    # 1. Ultrasonic sensor takes priority when connected (< 3.0m).
-    # 2. Monocular pinhole geometry provides real-world visual distance estimation when unplugged or for lateral objects.
+    # STRICT HARDWARE RULE: The physical ultrasonic sensor (HC-SR04) is the ONLY distance source.
+    # If the sensor is disconnected (distance_meters is None), NO distance is announced or fabricated.
     # Distances under 1.0 meter are phrased in centimeters for immediate clarity to blind individuals.
     def _get_item_dist_str(items, is_center=False):
-        if is_center and distance_meters is not None and 0.0 < distance_meters < 3.0:
-            if distance_meters < 1.0:
-                return f", at {int(round(distance_meters * 100))} centimeters"
-            return f", at {distance_meters:.1f} meters"
-        if items and items[0].get("visual_distance") is not None:
-            vd = items[0]["visual_distance"]
-            if vd <= 5.0:
-                if is_center and distance_meters is not None and 0.0 < distance_meters < 3.0:
-                    if distance_meters < 1.0:
-                        return f", at {int(round(distance_meters * 100))} centimeters"
-                    return f", at {distance_meters:.1f} meters"
-                if vd < 1.0:
-                    return f", at about {int(round(vd * 100))} centimeters"
-                return f", at about {vd:.1f} meters"
-        elif is_center and distance_meters is not None and 0.0 < distance_meters < 3.0:
+        if is_center and distance_meters is not None and 0.02 <= distance_meters < 3.0:
             if distance_meters < 1.0:
                 return f", at {int(round(distance_meters * 100))} centimeters"
             return f", at {distance_meters:.1f} meters"
@@ -748,13 +736,10 @@ def format_spatial_announcement(detections, distance_meters=None, target_zone=No
     l_dist_str = _get_item_dist_str(left_items)
     r_dist_str = _get_item_dist_str(right_items)
 
-    visual_proximity = any(
-        (it.get("visual_distance") is not None and it["visual_distance"] < 1.1)
-        for it in center_items
-    )
-    # Ultrasonic detection directly ahead (detects walls, doors, pillars without visual boxes):
+    # STRICT HARDWARE RULE: Proximity is 100% determined by physical HC-SR04 sonar.
+    # No visual bounding box size guesswork is used for distance.
     sonar_center_detected = (distance_meters is not None and 0.02 <= distance_meters < 1.8)
-    middle_proximity = (distance_meters is not None and 0.02 <= distance_meters < 1.0) or visual_proximity
+    middle_proximity = (distance_meters is not None and 0.02 <= distance_meters < 1.0)
     has_low_ahead = bool(zones["bottom-middle"])
     has_overhead = bool(zones["top-middle"])
 

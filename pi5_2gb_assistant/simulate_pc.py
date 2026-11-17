@@ -310,7 +310,14 @@ def print_cv_image_telemetry(frame, detections, current_fps, distance_meters, re
     confidence scores, and a 3-zone spatial radar without saving any image files to disk.
     """
     h, w = frame.shape[:2]
-    dist_str = f"{distance_meters:.2f}m" if (distance_meters is not None and 0.0 < distance_meters < 3.0) else "Clear (>3.0m)"
+    if distance_meters is not None:
+        if distance_meters >= 2.98:
+            dist_str = "Clear (>3.0m)"
+        else:
+            dist_str = f"{distance_meters:.2f}m ({int(round(distance_meters * 100))}cm)"
+    else:
+        dist_str = "DISCONNECTED [No Hardware Sensor]"
+
     inf_str = f"{inference_ms:.1f} ms" if inference_ms else f"~{1000.0 / max(1.0, current_fps):.1f} ms"
 
     print("\n" + "=" * 76)
@@ -327,9 +334,8 @@ def print_cv_image_telemetry(frame, detections, current_fps, distance_meters, re
             c_name = d["class"].upper()
             conf = int(d["confidence"] * 100)
             z = d.get("zone", "middle-center").upper()
-            v_dist = f"{d['visual_distance']:.1f}m" if d.get("visual_distance") else "N/A"
             app = " [APPROACHING!]" if d.get("is_approaching") else ""
-            print(f"   * {c_name:<12} | Conf: {conf:>2}% | Box: [X:{box[0]:<3} Y:{box[1]:<3} W:{bw:<3} H:{bh:<3}] | Zone: {z:<13} | Dist: {v_dist}{app}")
+            print(f"   * {c_name:<14} | Conf: {conf:>2}% | Box: [X:{box[0]:<3} Y:{box[1]:<3} W:{bw:<3} H:{bh:<3}] | Zone: {z:<13}{app}")
     else:
         print(" Detection Status : Path clear ahead. No bounding boxes above threshold.")
 

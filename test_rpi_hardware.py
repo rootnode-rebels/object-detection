@@ -263,15 +263,18 @@ def test_gpio():
         sensor = DistanceSensor(echo=PIN_ECHO, trigger=PIN_TRIGGER, max_distance=3.0, queue_len=2, partial=True)
         if hasattr(sensor, '_queue') and sensor._queue is not None:
             sensor._queue.ignore = frozenset()
-            sensor._queue.average = lambda q: 1.0 if not q or q[-1] is None else q[-1]
+            sensor._queue.average = lambda q: (q[-1] if q else None)
         time.sleep(0.15)
         dist = sensor.distance
-        if dist is not None:
+        if dist is not None and 0.02 <= dist <= 3.0:
             dist_str = f"{dist:.2f} meters ({dist * 100:.1f} cm)" if dist < 2.95 else "Clear (>3.0 meters / Open space)"
             print(f"  Live Ultrasonic Distance : {dist_str}")
-            print("  [PASS] HC-SR04 sensor read successfully.")
+            print("  [PASS] HC-SR04 physical sensor verified & active.")
+        else:
+            print("  [WARN] HC-SR04 returned no echo (Sensor Disconnected or Open Space).")
+            print("         If connected, check VCC (5V), GND, Trigger (GPIO 23), Echo (GPIO 24).")
     except Exception as e:
-        print(f"  [WARN] Ultrasonic sensor error: {e}")
+        print(f"  [WARN] Ultrasonic sensor disconnected/error: {e}")
         if "pin factory" in str(e).lower() or "badpin" in str(e).lower():
             print("  [TIP] On Raspberry Pi 5 RP1, install lgpio: sudo apt install python3-lgpio -y")
         print("  Check 5V/GND, Trigger (GPIO 23), Echo (GPIO 24 via voltage divider).")

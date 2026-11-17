@@ -1,0 +1,92 @@
+person
+chair
+bench
+table
+desk
+staircase
+door
+window
+wall
+pillar
+handrail
+water bottle
+dustbin
+backpack
+school bag
+book
+laptop
+mobile phone
+computer
+bicycle
+motorcycle
+scooter
+car
+bus
+truck
+auto-rickshaw
+traffic light
+road sign
+traffic cone
+road barrier
+road divider
+pothole
+electric pole
+tree
+plant
+dog
+cat
+helmet
+umbrella
+garbage bag
+cup
+glass
+plate
+bowl
+spoon
+fork
+lunch box
+food container
+refrigerator
+television
+sofa
+bed
+cabinet
+cupboard
+shelf
+mirror
+clock
+fan
+light
+switchboard
+electrical socket
+sink
+toilet
+washing machine
+printer
+projector
+keyboard
+computer mouse
+whiteboard
+blackboard
+bicycle stand
+parking sign
+speed breaker
+pedestrian crossing
+street light
+fire hydrant
+fence
+gate
+garbage bin
+water tank
+construction material
+brick
+cement bag
+wooden plank
+stone
+rock
+grass
+flower
+bush
+tree branch
+manhole
+drain
