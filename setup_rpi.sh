@@ -81,7 +81,13 @@ fi
 # 2. Update APT Package Repositories
 echo ""
 echo "[STEP 2/7] Updating system package index..."
-sudo apt update -y
+if ! sudo apt update -y; then
+    echo "  [WARN] Corrupted APT cache or network interruption detected."
+    echo "  [INFO] Auto-repairing: Purging /var/lib/apt/lists and rebuilding index..."
+    sudo rm -rf /var/lib/apt/lists/*
+    sudo apt clean
+    sudo apt update -y
+fi
 
 # 3. Install Required Pre-Compiled System Dependencies via APT
 # NOTE: Installing opencv, numpy, and psutil via APT avoids compiling heavy wheels in RAM!
