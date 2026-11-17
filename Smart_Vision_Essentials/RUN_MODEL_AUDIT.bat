@@ -1,7 +1,7 @@
 @echo off
-title Smart Vision Assistant - Model Audit & Benchmark Report
+title Smart Vision Assistant - Model Audit and Benchmark Report
 echo ============================================================
-echo   Running AI Model Audit & Performance Benchmark...
+echo   Running AI Model Audit and Performance Benchmark...
 echo ============================================================
 echo.
 

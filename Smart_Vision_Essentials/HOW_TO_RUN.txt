@@ -1,6 +1,6 @@
 ================================================================================
 SMART VISION ASSISTANT FOR VISUALLY IMPAIRED SAFETY
-ESSENTIAL CLIENT RUNTIME PACKAGE
+ESSENTIAL CLIENT RUNTIME PACKAGE (LAPTOP DEMO & RASPBERRY PI 5)
 ================================================================================
 
 This package contains ONLY the essential, production-ready files needed to run
@@ -8,31 +8,48 @@ the Smart Vision Assistant. All non-essential training scripts, video renders,
 and HTML generators have been removed for a clean, zero-clutter experience.
 
 --------------------------------------------------------------------------------
-HOW TO RUN ON WINDOWS PC / LAPTOP (WITH WEBCAM)
+HOW TO RUN THE DEMO ON WINDOWS LAPTOP / PC (WITH WEBCAM)
 --------------------------------------------------------------------------------
 Step 1: Install Required Python Modules (One-Time Setup)
         - Double-click: INSTALL_MODULES.bat
-        - OR run this command in PowerShell / Terminal:
-          python -m pip install opencv-python numpy psutil pywin32
+        - (Or run in PowerShell: python -m pip install opencv-python numpy psutil pywin32)
 
-Step 2: Run the Assistant
+Step 2: Start the Live Laptop Demo
         - Double-click: RUN_ON_PC.bat
-        - (Press 'q' inside the webcam window to exit)
+        - The webcam will open with live AI bounding boxes, voice guidance, and HUD.
 
-Optional: Model Audit & Benchmark Report
+Demo Controls & Keyboard Shortcuts:
+        - [W] or [Up Arrow]    : Move closer to simulated obstacle (distance decreases)
+        - [S] or [Down Arrow]  : Move farther from simulated obstacle (distance increases)
+        - [A]                  : Toggle Auto-walk simulation mode (walks towards obstacle)
+        - [M]                  : Toggle Sonar Beep Mute
+        - [q]                  : Exit the demo
+
+Step 3: Test Hardware Alert Buzzer Sound (Optional)
+        - Run: python test_buzzer.py
+        - Plays confirmation chirp, caution pulses, and rapid emergency alarm (<50cm).
+
+Step 4: Show AI Model Audit & Performance Benchmark (Client Meeting)
         - Double-click: RUN_MODEL_AUDIT.bat
-        - Displays dataset provenance (5.8M images), 92 class list, tensor shapes,
-          and a live 50-frame latency/FPS benchmark.
+        - Displays:
+          1. 5.8 Million image dataset provenance (Objects365, CC3M, GoldG)
+          2. 92 Custom life-safety classes
+          3. Exact tensor shape proof: (1, 96, 2100)
+          4. Live 30-frame latency & FPS benchmark
 
 --------------------------------------------------------------------------------
 HOW TO RUN ON RASPBERRY PI 5 (2GB / 4GB / 8GB)
 --------------------------------------------------------------------------------
-Step 1: Install Required System Modules
+Hardware Pinout Guide:
+  - HC-SR04 Trigger Pin : Physical Pin 16 (GPIO 23)
+  - HC-SR04 Echo Pin    : Physical Pin 18 (GPIO 24 via 1k/2k voltage divider)
+  - Tactile Push Button : Physical Pin 11 (GPIO 17 to GND)
+  - Hardware Buzzer (+) : Physical Pin 13 (GPIO 27, Active 3.3V/5V)
+  - Hardware Buzzer (-) : Physical Pin 14 (Ground / GND)
+
+Step 1: One-Click Automated Setup
         Open terminal in this folder and run:
         sudo ./setup_rpi.sh
-
-        (Or run manual one-liner:
-        sudo apt update && sudo apt install -y python3-opencv python3-gpiozero python3-psutil python3-numpy python3-lgpio espeak-ng alsa-utils v4l-utils)
 
 Step 2: Start Assistant
         ./run_rpi.sh
@@ -41,8 +58,9 @@ Step 2: Start Assistant
 FILES INCLUDED IN THIS ESSENTIAL PACKAGE:
 --------------------------------------------------------------------------------
 - INSTALL_MODULES.bat      : 1-click module installer for Windows
-- RUN_ON_PC.bat            : 1-click runner for Windows PC with webcam
+- RUN_ON_PC.bat            : 1-click runner for Windows laptop demo with webcam
 - RUN_MODEL_AUDIT.bat      : 1-click technical benchmark and audit report
+- test_buzzer.py           : Standalone buzzer diagnostic & acoustic tester
 - simulate_pc.py           : Full PC simulator with voice guidance & HUD
 - smart_assistant.py       : Core production assistant (auto-detects Pi or PC)
 - yolo_detector.py         : CPU-optimized YOLOv8 OpenCV DNN detection engine
