@@ -84,10 +84,7 @@ def test_raspberry_pi_gpio(trigger_pin, echo_pin, temp_c=22.0, sample_rate_hz=12
     sensor = None
     try:
         from gpiozero import DistanceSensor
-        sensor = DistanceSensor(echo=echo_pin, trigger=trigger_pin, max_distance=3.0, queue_len=2, partial=True)
-        if hasattr(sensor, '_queue') and sensor._queue is not None:
-            sensor._queue.ignore = frozenset()
-            sensor._queue.average = lambda q: (q[-1] if q else None)
+        sensor = DistanceSensor(echo=echo_pin, trigger=trigger_pin, max_distance=3.0, queue_len=3, partial=True)
     except ImportError:
         print("[FAIL] 'gpiozero' is not installed.")
         print("       Install on Raspberry Pi OS via: sudo apt install python3-gpiozero python3-lgpio -y")
@@ -104,8 +101,9 @@ def test_raspberry_pi_gpio(trigger_pin, echo_pin, temp_c=22.0, sample_rate_hz=12
     print(f"[INFO] Live Acoustic Pinging Active @ {sample_rate_hz} Hz. Press Ctrl+C to stop.\n")
 
     consecutive_timeouts = 0
+    total_timeouts = 0
+    checked_swap = False
     readings = []
-    start_time = time.time()
     ping_interval = 1.0 / max(1, sample_rate_hz)
 
     try:
@@ -113,21 +111,45 @@ def test_raspberry_pi_gpio(trigger_pin, echo_pin, temp_c=22.0, sample_rate_hz=12
             t0 = time.time()
             dist = None
             try:
-                dist = sensor.distance
+                # Check if internal queue has received at least one ping
+                has_items = (hasattr(sensor, '_queue') and sensor._queue is not None and len(sensor._queue.queue) > 0)
+                d = sensor.distance
+                if d is not None and 0.02 <= d <= 3.0:
+                    if d > 0.02 or has_items:
+                        dist = d
             except Exception:
                 dist = None
 
-            if dist is not None and 0.02 <= dist <= 3.0:
+            if dist is not None:
                 consecutive_timeouts = 0
+                total_timeouts = 0
                 readings.append(dist)
                 if len(readings) > 10:
                     readings.pop(0)
-                avg_dist = sum(readings) / len(readings)
                 pulse_us = int((dist * 2.0 / v_sound) * 1_000_000)
                 sys.stdout.write(f"\r  {format_radar_bar(dist)} | Pulse: {pulse_us:5d}µs   ")
                 sys.stdout.flush()
             else:
                 consecutive_timeouts += 1
+                total_timeouts += 1
+
+                # If no echo received after 12 attempts (~1 second), check if TRIG & ECHO are swapped
+                if total_timeouts >= 12 and not checked_swap:
+                    checked_swap = True
+                    sys.stdout.write(f"\r  [TESTING] Checking if Trigger & Echo wires are reversed on breadboard...\n")
+                    sys.stdout.flush()
+                    try:
+                        swap_sensor = DistanceSensor(echo=trigger_pin, trigger=echo_pin, max_distance=3.0, queue_len=2, partial=True)
+                        time.sleep(0.2)
+                        sw_d = swap_sensor.distance
+                        swap_sensor.close()
+                        if sw_d is not None and 0.02 <= sw_d <= 3.0:
+                            print(f"\n  [ALERT] REVERSED WIRING DETECTED! Echo was received on GPIO {trigger_pin}!")
+                            print(f"          Current wires: Trigger=GPIO {trigger_pin}, Echo=GPIO {echo_pin}")
+                            print(f"          Fix: Swap physical Pin 16 (GPIO 23) and Pin 18 (GPIO 24) on your breadboard!\n")
+                    except Exception:
+                        pass
+
                 if consecutive_timeouts >= 8:
                     sys.stdout.write(f"\r  [WARN] No echo received! Check 5V/GND & Echo resistor divider.          \n")
                     sys.stdout.flush()

@@ -261,11 +261,9 @@ def test_gpio():
     print(f"  Testing HC-SR04 Ultrasonic Sensor (Trigger={PIN_TRIGGER}, Echo={PIN_ECHO})...")
     sensor = None
     try:
-        sensor = DistanceSensor(echo=PIN_ECHO, trigger=PIN_TRIGGER, max_distance=3.0, queue_len=2, partial=True)
-        if hasattr(sensor, '_queue') and sensor._queue is not None:
-            sensor._queue.ignore = frozenset()
-            sensor._queue.average = lambda q: (q[-1] if q else None)
-        time.sleep(0.15)
+        sensor = DistanceSensor(echo=PIN_ECHO, trigger=PIN_TRIGGER, max_distance=3.0, queue_len=3, partial=True)
+        # Give sensor 300ms to fire initial pings and populate internal queue
+        time.sleep(0.3)
         dist = sensor.distance
         if dist is not None and 0.02 <= dist <= 3.0:
             dist_str = f"{dist:.2f} meters ({dist * 100:.1f} cm)" if dist < 2.95 else "Clear (>3.0 meters / Open space)"
