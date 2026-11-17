@@ -33,12 +33,13 @@ from yolo_detector import YOLODetector, format_spatial_announcement
 
 # Safe GPIO import for Raspberry Pi
 try:
-    from gpiozero import DistanceSensor, Button
+    from gpiozero import DistanceSensor, Button, Buzzer
     GPIO_AVAILABLE = True
 except (ImportError, Exception) as e:
     GPIO_AVAILABLE = False
     DistanceSensor = None
     Button = None
+    Buzzer = None
     print(f"[WARN] gpiozero not available ({e}). Running in simulation/desktop mode.")
 
 # Optional CPU / System Telemetry
@@ -52,12 +53,94 @@ except ImportError:
 # ==========================================
 # 1. HARDWARE PIN CONFIGURATION
 # ==========================================
-PIN_TRIGGER = 23
-PIN_ECHO = 24
-PIN_BUTTON = 17
+PIN_TRIGGER = 23    # Physical Pin 16 (HC-SR04 Trig)
+PIN_ECHO = 24       # Physical Pin 18 (HC-SR04 Echo via voltage divider)
+PIN_BUTTON = 17     # Physical Pin 11 (Tactile Button)
+PIN_BUZZER = 27     # Physical Pin 13 (Active Alert Buzzer, GND on Pin 14)
 
 sensor = None
 button = None
+buzzer = None
+
+
+class HardwareBuzzer:
+    """
+    Non-blocking Hardware Alert Buzzer for Visually Impaired Safety Alerts.
+    Supports physical active buzzer on Raspberry Pi GPIO 27, and fallback audio on PC.
+    
+    Alert Modes:
+    - CRITICAL (<0.50m / 50cm): Rapid urgent beeping (80ms on, 80ms off)
+    - WARNING (0.50m - 1.00m or approaching hazard): Pulsed caution beeping (150ms on, 250ms off)
+    - CHIRP: Single 50ms tactile confirmation beep on push button press
+    - SILENT: Clear space (>=1.00m), sensor disconnected, or no obstacles
+    """
+    def __init__(self, pin=27, enabled=True):
+        self.pin = pin
+        self.enabled = enabled
+        self.buzzer = None
+        self.current_state = "SILENT"
+        self._lock = threading.Lock()
+
+        if self.enabled and GPIO_AVAILABLE and Buzzer is not None:
+            try:
+                self.buzzer = Buzzer(self.pin)
+                print(f"[INFO] Hardware alert buzzer initialized on GPIO {self.pin} (Physical Pin 13).")
+            except Exception as e:
+                print(f"[WARN] Could not claim buzzer on GPIO {self.pin}: {e}")
+                self.buzzer = None
+
+    def update(self, distance_meters, has_approaching=False):
+        """Dynamically adjusts buzzer pulsing based on physical sensor proximity."""
+        if not self.enabled:
+            return
+
+        target_state = "SILENT"
+        if distance_meters is not None:
+            if 0.02 <= distance_meters < 0.50:
+                target_state = "CRITICAL"
+            elif 0.50 <= distance_meters < 1.00 or has_approaching:
+                target_state = "WARNING"
+
+        if target_state == self.current_state:
+            return
+
+        with self._lock:
+            self.current_state = target_state
+            if self.buzzer is not None:
+                try:
+                    if target_state == "CRITICAL":
+                        # Rapid urgent beeps: 80ms on, 80ms off
+                        self.buzzer.beep(on_time=0.08, off_time=0.08, background=True)
+                    elif target_state == "WARNING":
+                        # Moderate warning beeps: 150ms on, 250ms off
+                        self.buzzer.beep(on_time=0.15, off_time=0.25, background=True)
+                    else:
+                        self.buzzer.off()
+                except Exception:
+                    pass
+
+    def chirp(self):
+        """Single short confirmation chirp (e.g. for tactile button confirmation)."""
+        if not self.enabled:
+            return
+        if self.buzzer is not None:
+            try:
+                self.buzzer.beep(on_time=0.05, off_time=0.05, n=1, background=True)
+            except Exception:
+                pass
+
+    def close(self):
+        """Silences and safely releases buzzer GPIO."""
+        with self._lock:
+            if self.buzzer is not None:
+                try:
+                    self.buzzer.off()
+                    self.buzzer.close()
+                except Exception:
+                    pass
+                self.buzzer = None
+            self.current_state = "SILENT"
+
 sonar_connected = False
 sonar_reading = None
 sonar_thread = None
@@ -113,18 +196,19 @@ def _sonar_worker():
 
         time.sleep(0.04)  # ~25 Hz ping rate
 
-def init_sensors(trigger_pin=23, echo_pin=24, button_pin=17, enable_sonar=True):
+def init_sensors(trigger_pin=23, echo_pin=24, button_pin=17, buzzer_pin=27, enable_sonar=True, enable_buzzer=True):
     """
-    Initializes hardware GPIO sensors (HC-SR04 ultrasonic distance sensor & tactile button).
+    Initializes hardware GPIO sensors (HC-SR04 ultrasonic sensor, tactile button & alert buzzer).
     STRICT RULE: Distance is ONLY enabled if a verified physical sensor is connected.
     """
-    global sensor, button, PIN_TRIGGER, PIN_ECHO, PIN_BUTTON, sonar_connected, sonar_reading, sonar_thread, sonar_thread_running
+    global sensor, button, buzzer, PIN_TRIGGER, PIN_ECHO, PIN_BUTTON, PIN_BUZZER, sonar_connected, sonar_reading, sonar_thread, sonar_thread_running
     PIN_TRIGGER = trigger_pin
     PIN_ECHO = echo_pin
     PIN_BUTTON = button_pin
+    PIN_BUZZER = buzzer_pin
 
     if not GPIO_AVAILABLE:
-        print("[INFO] GPIO unavailable. Hardware distance sensor disabled (Desktop/Simulation mode).")
+        print("[INFO] GPIO unavailable. Hardware sensors disabled (Desktop/Simulation mode).")
         sonar_connected = False
         sonar_reading = None
         return
@@ -137,6 +221,10 @@ def init_sensors(trigger_pin=23, echo_pin=24, button_pin=17, enable_sonar=True):
         try: button.close()
         except Exception: pass
         button = None
+    if buzzer is not None:
+        try: buzzer.close()
+        except Exception: pass
+        buzzer = None
 
     sonar_thread_running = False
 
@@ -178,6 +266,11 @@ def init_sensors(trigger_pin=23, echo_pin=24, button_pin=17, enable_sonar=True):
     except Exception as e:
         print(f"[WARN] Could not initialize push button on GPIO {PIN_BUTTON}: {e}")
         button = None
+
+    if enable_buzzer:
+        buzzer = HardwareBuzzer(pin=PIN_BUZZER, enabled=True)
+    else:
+        buzzer = None
 
 def get_distance():
     """
@@ -897,6 +990,8 @@ def main():
     parser.add_argument("--trigger-pin", type=int, default=23, help="HC-SR04 trigger GPIO pin (default: 23)")
     parser.add_argument("--echo-pin", type=int, default=24, help="HC-SR04 echo GPIO pin (default: 24)")
     parser.add_argument("--button-pin", type=int, default=17, help="Tactile push button GPIO pin (default: 17)")
+    parser.add_argument("--buzzer-pin", type=int, default=27, help="Active alert buzzer GPIO pin (default: 27 / Pin 13)")
+    parser.add_argument("--no-buzzer", action="store_true", help="Disable hardware alert buzzer")
     parser.add_argument("--no-sonar", action="store_true", help="Disable ultrasonic sensor for pure high-speed camera mode")
     parser.add_argument("--no-telemetry", action="store_true", help="Disable live terminal image processing telemetry")
     args = parser.parse_args()
@@ -904,12 +999,14 @@ def main():
     # Immediate audio confirmation for visually impaired user: hardware is powering up
     speak("Starting smart vision assistant. Please wait.")
 
-    # Initialize GPIO Sensors with configured pins (or skip sonar if --no-sonar)
+    # Initialize GPIO Sensors with configured pins (or skip sonar/buzzer if disabled)
     init_sensors(
         trigger_pin=args.trigger_pin,
         echo_pin=args.echo_pin,
         button_pin=args.button_pin,
-        enable_sonar=(not args.no_sonar)
+        buzzer_pin=args.buzzer_pin,
+        enable_sonar=(not args.no_sonar),
+        enable_buzzer=(not args.no_buzzer)
     )
 
     # Auto-detect assistive 92 model if not specified (script-relative path)
@@ -1023,10 +1120,16 @@ def main():
             if button_raw and (time.time() - last_button_time > 1.8):
                 button_pressed = True
                 last_button_time = time.time()
+                if buzzer is not None:
+                    buzzer.chirp()
 
             # Run YOLOv8 detection on CPU with multi-frame approach tracking and temporal confirmation
             detections = detector.detect(frame, distance_meters=distance_meters, filter_unconfirmed=True)
             has_approaching = any(d.get("is_approaching", False) for d in detections)
+
+            # Update Hardware Alert Buzzer in real-time (Rapid alarm <50cm, pulsed warning <1.0m)
+            if buzzer is not None:
+                buzzer.update(distance_meters=distance_meters, has_approaching=has_approaching)
 
             # Live Terminal Image Processing Feedback (every 1.5 seconds)
             if not hasattr(main, '_last_print_time'):
@@ -1118,8 +1221,9 @@ def main():
 
                 cv2.putText(frame, dist_label,
                             (10, 66), cv2.FONT_HERSHEY_SIMPLEX, 0.52, dist_color, 2)
-                app_badge = "RADAR: APPROACHING HAZARD!" if has_approaching else "RADAR: MONITORING"
-                app_badge_color = (0, 0, 255) if has_approaching else (200, 200, 200)
+                bz_status = f" | BUZZER: {buzzer.current_state}" if buzzer is not None and buzzer.enabled else ""
+                app_badge = ("RADAR: APPROACHING HAZARD!" if has_approaching else "RADAR: MONITORING") + bz_status
+                app_badge_color = (0, 0, 255) if (has_approaching or (buzzer and buzzer.current_state == 'CRITICAL')) else (200, 200, 200)
                 cv2.putText(frame, app_badge,
                             (10, 88), cv2.FONT_HERSHEY_SIMPLEX, 0.45, app_badge_color, 1)
 
@@ -1147,6 +1251,11 @@ def main():
         if button is not None:
             try:
                 button.close()
+            except Exception:
+                pass
+        if buzzer is not None:
+            try:
+                buzzer.close()
             except Exception:
                 pass
         stop_tts()

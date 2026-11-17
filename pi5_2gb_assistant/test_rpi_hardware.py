@@ -24,6 +24,7 @@ sys.path.insert(0, BASE_DIR)
 PIN_TRIGGER = 23
 PIN_ECHO = 24
 PIN_BUTTON = 17
+PIN_BUZZER = 27
 
 def print_header(title):
     print("\n" + "=" * 65)
@@ -296,6 +297,20 @@ def test_gpio():
     finally:
         if btn is not None:
             try: btn.close()
+            except Exception: pass
+
+    print(f"  Testing Hardware Alert Buzzer on GPIO {PIN_BUZZER} (Physical Pin 13)...")
+    bz = None
+    try:
+        from gpiozero import Buzzer
+        bz = Buzzer(PIN_BUZZER)
+        bz.beep(on_time=0.06, off_time=0.06, n=2, background=False)
+        print("  [PASS] Hardware alert buzzer sounded test beeps.")
+    except Exception as e:
+        print(f"  [WARN] Buzzer not detected or error: {e}")
+    finally:
+        if bz is not None:
+            try: bz.close()
             except Exception: pass
 
     return True
