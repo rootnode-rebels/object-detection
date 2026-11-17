@@ -345,13 +345,14 @@ class SpeechCoordinator:
        - macOS: say -r 135.
     4. Force/Interruption support: tactile push button halts current non-urgent speech immediately.
     """
-    def __init__(self):
+    def __init__(self, voice_speed=165):
         self.lock = threading.Lock()
         self.current_process = None
         self.is_speaking_flag = False
         self.last_speech_started = 0.0
         self.last_speech_finished = 0.0
         self._sapi_voice = None
+        self.voice_speed = voice_speed
 
     def is_speaking(self):
         with self.lock:
@@ -446,9 +447,9 @@ class SpeechCoordinator:
             import win32com.client
             voice = win32com.client.Dispatch("SAPI.SpVoice")
             self._sapi_voice = voice
-            # Set rate to -2 for clear, relaxed pacing (default 0 or unconfigured can be very fast)
+            # Set rate to 0 for natural, crisp 1.0x human speaking tempo
             try:
-                voice.Rate = -2
+                voice.Rate = 0
                 voice.Volume = 100
             except Exception:
                 pass
@@ -458,9 +459,9 @@ class SpeechCoordinator:
         except Exception:
             pass
 
-        # Fallback to PowerShell System.Speech with rate -2
+        # Fallback to PowerShell System.Speech with rate 0 (1.0x normal)
         try:
-            ps_cmd = f'Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; $s.Rate = -2; $s.Speak("{sanitized}");'
+            ps_cmd = f'Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; $s.Rate = 0; $s.Speak("{sanitized}");'
             proc = subprocess.Popen(["powershell", "-NoProfile", "-Command", ps_cmd], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             with self.lock:
                 self.current_process = proc
@@ -469,17 +470,40 @@ class SpeechCoordinator:
             pass
 
     def _play_linux(self, clean_text):
-        # Calm, steady 110 words/minute (-s110) with 120ms word gaps (-g12) and relaxed pitch (-p45)
+        # Fluid, natural 1.0x human speaking tempo (165 wpm), clean pitch (-p50), full volume (-a100).
+        # REMOVED -g12 and -s110: Eliminates artificial 120ms word gaps, slow 0.5x crawl, and audio cracking.
+        # Pipes clean synthesized WAV to aplay to eliminate Linux ALSA buffer underruns / clicks on Raspberry Pi.
+        spd = getattr(self, 'voice_speed', 165)
+        escaped_text = clean_text.replace("'", "").replace('"', '').replace(';', '').replace('&', '').strip()
+
         for engine in ['espeak-ng', 'espeak']:
+            # 1. Preferred high-fidelity pipeline: espeak WAV piped to aplay for smooth hardware ALSA dmix buffer
             try:
+                cmd = f"{engine} -ven-us -s{spd} -p50 -a100 \"{escaped_text}\" --stdout | aplay -q -D default 2>/dev/null"
                 proc = subprocess.Popen(
-                    [engine, '-ven-us', '-s110', '-g12', '-p45', clean_text],
+                    cmd,
+                    shell=True,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL
                 )
                 with self.lock:
                     self.current_process = proc
-                proc.wait(timeout=15.0)
+                proc.wait(timeout=12.0)
+                if proc.returncode == 0:
+                    return
+            except Exception:
+                pass
+
+            # 2. Direct engine fallback if aplay pipe is not used
+            try:
+                proc = subprocess.Popen(
+                    [engine, '-ven-us', f'-s{spd}', '-p50', '-a100', escaped_text],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                with self.lock:
+                    self.current_process = proc
+                proc.wait(timeout=12.0)
                 return
             except FileNotFoundError:
                 continue

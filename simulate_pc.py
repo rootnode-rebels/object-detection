@@ -99,7 +99,7 @@ class VoiceSynthesizer:
                     voice = win32com.client.Dispatch("SAPI.SpVoice")
                     self._sapi_voice = voice
                     try:
-                        voice.Rate = -2  # Calm, comfortable ~130 wpm
+                        voice.Rate = 0  # Natural 1.0x human speaking tempo
                         voice.Volume = 100
                     except Exception:
                         pass
@@ -114,7 +114,7 @@ class VoiceSynthesizer:
                     import winsound
                     import win32com.client
                     voice = win32com.client.Dispatch("SAPI.SpVoice")
-                    try: voice.Rate = -2
+                    try: voice.Rate = 0
                     except Exception: pass
                     stream = win32com.client.Dispatch("SAPI.SpFileStream")
                     stream.Open(self.temp_wav, 3, False)
@@ -128,7 +128,7 @@ class VoiceSynthesizer:
 
                 # Method 2: Fallback powershell System.Speech
                 try:
-                    ps_cmd = f"Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; $s.Rate = -2; $s.Speak('{clean_text}')"
+                    ps_cmd = f"Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; $s.Rate = 0; $s.Speak('{clean_text}')"
                     subprocess.run(["powershell", "-NoProfile", "-Command", ps_cmd],
                                    capture_output=True, timeout=10)
                     return
@@ -138,16 +138,18 @@ class VoiceSynthesizer:
             # macOS native say command with rate 135
             elif sys.platform == "darwin":
                 try:
-                    subprocess.run(["say", "-r", "135", clean_text], capture_output=True, timeout=10)
+                    subprocess.run(["say", "-r", "145", clean_text], capture_output=True, timeout=10)
                     return
                 except Exception:
                     pass
 
-            # Linux espeak command with steady 110 wpm and 120ms word gap
+            # Linux espeak command with natural 165 wpm and clean aplay ALSA streaming
             else:
+                escaped = clean_text.replace("'", "").replace('"', '').replace(';', '').replace('&', '').strip()
                 for eng in ['espeak-ng', 'espeak']:
                     try:
-                        subprocess.run([eng, "-ven-us", "-s110", "-g12", "-p45", clean_text], capture_output=True, timeout=12)
+                        cmd = f"{eng} -ven-us -s165 -p50 -a100 \"{escaped}\" --stdout | aplay -q -D default 2>/dev/null || {eng} -ven-us -s165 -p50 -a100 \"{escaped}\""
+                        subprocess.run(cmd, shell=True, capture_output=True, timeout=12)
                         return
                     except Exception:
                         pass
