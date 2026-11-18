@@ -31,6 +31,12 @@ sys.path.insert(0, BASE_DIR)
 # CPU-Optimized YOLOv8 Detector & Spatial Formatter
 from yolo_detector import YOLODetector, format_spatial_announcement
 
+# Precision Raspberry Pi 5 Ultrasonic Sonar Driver (Direct lgpio Kernel-IRQ Timestamps)
+try:
+    from sonar_driver import Pi5UltrasonicSonar
+except ImportError:
+    Pi5UltrasonicSonar = None
+
 # Safe GPIO import for Raspberry Pi
 try:
     from gpiozero import DistanceSensor, Button, Buzzer
@@ -158,6 +164,8 @@ def _sonar_latest_filter(queue):
 def _sonar_worker():
     """
     Background daemon thread to continuously poll physical ultrasonic sensor (HC-SR04).
+    Uses direct lgpio kernel-IRQ hardware timestamps (Pi5UltrasonicSonar) with 70ms acoustic
+    settling and 5-sample median + spike-guard filtering for accurate, jitter-free distance.
     STRICT HARDWARE RULE:
     - If obstacle or hand is detected (0.02m to 2.98m): updates live distance, marks sensor connected.
     - If clear open room (>3.0m): reports 3.0m clear, marks sensor connected.
@@ -167,39 +175,43 @@ def _sonar_worker():
     last_valid_time = 0.0
 
     while sonar_thread_running and sensor is not None:
+        t0 = time.perf_counter()
         try:
-            has_queue_items = (hasattr(sensor, '_queue') and sensor._queue is not None and len(sensor._queue.queue) > 0)
-
             d = None
-            try:
-                d = sensor.distance
-            except Exception:
-                d = None
+            if hasattr(sensor, "read_filtered"):
+                # Direct Pi5UltrasonicSonar (lgpio kernel-IRQ + median + bounce/spike rejection)
+                d = sensor.read_filtered()
+            else:
+                # Legacy gpiozero fallback
+                has_queue_items = (hasattr(sensor, '_queue') and sensor._queue is not None and len(sensor._queue.queue) > 0)
+                if has_queue_items:
+                    d = sensor.distance
 
             if d is not None and 0.02 <= d <= 3.0:
-                if d > 0.02 or has_queue_items:
-                    if d >= 2.98:
-                        sonar_reading = 3.0
-                    else:
-                        sonar_reading = round(float(d), 2)
-                    sonar_connected = True
-                    last_valid_time = time.time()
+                if d >= 2.98:
+                    sonar_reading = 3.0
+                else:
+                    sonar_reading = round(float(d), 2)
+                sonar_connected = True
+                last_valid_time = time.time()
             elif d is not None and d > 3.0:
                 sonar_reading = 3.0
                 sonar_connected = True
                 last_valid_time = time.time()
 
-            # Disconnection check: 2.0s without valid echo, or empty queue (never connected)
-            if (time.time() - last_valid_time) > 2.0 or not has_queue_items:
+            # Disconnection check: 2.0s without valid echo -> mark disconnected
+            if last_valid_time == 0.0 or (time.time() - last_valid_time) > 2.0:
                 sonar_reading = None
                 sonar_connected = False
 
         except Exception:
-            if (time.time() - last_valid_time) > 2.0:
+            if last_valid_time == 0.0 or (time.time() - last_valid_time) > 2.0:
                 sonar_reading = None
                 sonar_connected = False
 
-        time.sleep(0.05)
+        # Respect HC-SR04 datasheet minimum 60ms cycle (70ms prevents wall-echo collisions)
+        elapsed = time.perf_counter() - t0
+        time.sleep(max(0.01, 0.07 - elapsed))
 
 def init_sensors(trigger_pin=23, echo_pin=24, button_pin=17, buzzer_pin=27, enable_sonar=True, enable_buzzer=True):
     """
@@ -212,7 +224,7 @@ def init_sensors(trigger_pin=23, echo_pin=24, button_pin=17, buzzer_pin=27, enab
     PIN_BUTTON = button_pin
     PIN_BUZZER = buzzer_pin
 
-    if not GPIO_AVAILABLE:
+    if not GPIO_AVAILABLE and Pi5UltrasonicSonar is None:
         print("[INFO] GPIO unavailable. Hardware sensors disabled (Desktop/Simulation mode).")
         sonar_connected = False
         sonar_reading = None
@@ -235,21 +247,35 @@ def init_sensors(trigger_pin=23, echo_pin=24, button_pin=17, buzzer_pin=27, enab
 
     if enable_sonar:
         try:
-            candidate_sensor = DistanceSensor(
-                echo=PIN_ECHO,
-                trigger=PIN_TRIGGER,
-                max_distance=3.0,
-                queue_len=3,
-                partial=True
-            )
-            # Use gpiozero standard median filtering to smoothly reject acoustic flutter
+            if Pi5UltrasonicSonar is not None:
+                candidate_sensor = Pi5UltrasonicSonar(
+                    trigger_pin=PIN_TRIGGER,
+                    echo_pin=PIN_ECHO,
+                    max_distance=3.0,
+                    temp_c=25.0,
+                    window_size=5,
+                    ping_interval=0.07,
+                )
+                backend_info = f"{candidate_sensor.backend} on {candidate_sensor.chip_info}"
+            elif GPIO_AVAILABLE and DistanceSensor is not None:
+                candidate_sensor = DistanceSensor(
+                    echo=PIN_ECHO,
+                    trigger=PIN_TRIGGER,
+                    max_distance=3.0,
+                    queue_len=5,
+                    partial=True
+                )
+                backend_info = "gpiozero"
+            else:
+                raise RuntimeError("No GPIO sonar backend available")
+
             sensor = candidate_sensor
             sonar_connected = False
             sonar_reading = None
             sonar_thread_running = True
             sonar_thread = threading.Thread(target=_sonar_worker, daemon=True)
             sonar_thread.start()
-            print(f"[INFO] Ultrasonic hardware initialized on Trigger={PIN_TRIGGER}, Echo={PIN_ECHO}.")
+            print(f"[INFO] Ultrasonic hardware initialized on Trigger=GPIO {PIN_TRIGGER}, Echo=GPIO {PIN_ECHO} ({backend_info}).")
         except Exception as e:
             print(f"[INFO] Ultrasonic radar offline ({e}). Running vision-only mode (No distance).")
             sensor = None

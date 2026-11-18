@@ -77,57 +77,56 @@ def format_radar_bar(distance_m, max_range=3.0, bar_width=28):
     return f"{bar} {distance_m:.2f}m ({distance_m*100:.1f}cm | {distance_m*39.37:.1f}in) | {status}"
 
 
-def test_raspberry_pi_gpio(trigger_pin, echo_pin, temp_c=22.0, sample_rate_hz=12):
-    """Directly tests HC-SR04 connected to Raspberry Pi 5 GPIO pins."""
+def test_raspberry_pi_gpio(trigger_pin, echo_pin, temp_c=25.0, sample_rate_hz=12, use_polling=False):
+    """Directly tests HC-SR04 connected to Raspberry Pi 5 GPIO pins using Pi5UltrasonicSonar."""
     print(f"[INFO] Initializing Raspberry Pi GPIO Sonar (Trigger=GPIO {trigger_pin}, Echo=GPIO {echo_pin})...")
-    
+
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     sensor = None
     try:
-        from gpiozero import DistanceSensor
-        sensor = DistanceSensor(echo=echo_pin, trigger=trigger_pin, max_distance=3.0, queue_len=3, partial=True)
-    except ImportError:
-        print("[FAIL] 'gpiozero' is not installed.")
-        print("       Install on Raspberry Pi OS via: sudo apt install python3-gpiozero python3-lgpio -y")
-        return False
+        from sonar_driver import Pi5UltrasonicSonar
+        sensor = Pi5UltrasonicSonar(
+            trigger_pin=trigger_pin,
+            echo_pin=echo_pin,
+            max_distance=3.0,
+            temp_c=temp_c,
+            window_size=5,
+            ping_interval=max(0.07, 1.0 / max(1, sample_rate_hz)),
+            use_polling=use_polling,
+        )
+        print(f"[INFO] Sonar Backend : {sensor.backend} | Chip: {sensor.chip_info}")
+        echo_idle = sensor.echo_pin_state
+        if echo_idle is not None:
+            idle_label = "LOW (Healthy)" if echo_idle == 0 else "HIGH (WARNING: Check resistor divider / 5V wiring!)"
+            print(f"[INFO] ECHO Idle Pin : {idle_label}")
     except Exception as e:
-        print(f"[ERROR] Could not claim GPIO pins (Trigger={trigger_pin}, Echo={echo_pin}): {e}")
-        if "pin factory" in str(e).lower() or "badpin" in str(e).lower():
-            print("       [TIP] Raspberry Pi 5 RP1 requires 'python3-lgpio': sudo apt install python3-lgpio -y")
+        print(f"[ERROR] Could not initialize sonar on Trigger=GPIO {trigger_pin}, Echo=GPIO {echo_pin}: {e}")
+        print("       [TIP] Raspberry Pi 5 RP1 requires 'python3-lgpio': sudo apt install python3-lgpio -y")
         return False
 
     # Speed of sound calculation
     v_sound = 331.3 + (0.606 * temp_c)
     print(f"[INFO] Calibrated Speed of Sound: {v_sound:.1f} m/s (Ambient: {temp_c:.1f}°C)")
-    print(f"[INFO] Live Acoustic Pinging Active @ {sample_rate_hz} Hz. Press Ctrl+C to stop.\n")
+    print(f"[INFO] Live Acoustic Pinging Active (70ms settling cycle). Press Ctrl+C to stop.\n")
 
     consecutive_timeouts = 0
     total_timeouts = 0
     checked_swap = False
-    readings = []
-    ping_interval = 1.0 / max(1, sample_rate_hz)
+    ping_interval = max(0.07, 1.0 / max(1, sample_rate_hz))
 
     try:
         while True:
-            t0 = time.time()
-            dist = None
-            try:
-                # Check if internal queue has received at least one ping
-                has_items = (hasattr(sensor, '_queue') and sensor._queue is not None and len(sensor._queue.queue) > 0)
-                d = sensor.distance
-                if d is not None and 0.02 <= d <= 3.0:
-                    if d > 0.02 or has_items:
-                        dist = d
-            except Exception:
-                dist = None
+            t0 = time.perf_counter()
+            dist = sensor.read_filtered()
+            raw_pulse_us = sensor.last_pulse_us
+            status_code = sensor.last_status
 
-            if dist is not None:
+            if dist is not None and 0.02 <= dist <= 3.0:
                 consecutive_timeouts = 0
                 total_timeouts = 0
-                readings.append(dist)
-                if len(readings) > 10:
-                    readings.pop(0)
-                pulse_us = int((dist * 2.0 / v_sound) * 1_000_000)
-                sys.stdout.write(f"\r  {format_radar_bar(dist)} | Pulse: {pulse_us:5d}µs   ")
+                pulse_disp = int(round(raw_pulse_us)) if raw_pulse_us is not None else int((dist * 2.0 / v_sound) * 1_000_000)
+                raw_disp = f"{sensor.last_raw_meters*100:.1f}cm" if sensor.last_raw_meters is not None else "---"
+                sys.stdout.write(f"\r  {format_radar_bar(dist)} | Raw:{raw_disp:>6s} | Pulse:{pulse_disp:5d}µs   ")
                 sys.stdout.flush()
             else:
                 consecutive_timeouts += 1
@@ -139,26 +138,41 @@ def test_raspberry_pi_gpio(trigger_pin, echo_pin, temp_c=22.0, sample_rate_hz=12
                     sys.stdout.write(f"\r  [TESTING] Checking if Trigger & Echo wires are reversed on breadboard...\n")
                     sys.stdout.flush()
                     try:
-                        swap_sensor = DistanceSensor(echo=trigger_pin, trigger=echo_pin, max_distance=3.0, queue_len=2, partial=True)
-                        time.sleep(0.2)
-                        sw_d = swap_sensor.distance
+                        sensor.close()
+                        swap_sensor = Pi5UltrasonicSonar(
+                            trigger_pin=echo_pin,
+                            echo_pin=trigger_pin,
+                            max_distance=3.0,
+                            temp_c=temp_c,
+                            use_polling=use_polling,
+                        )
+                        sw_d, _ = swap_sensor.ping_once()
                         swap_sensor.close()
                         if sw_d is not None and 0.02 <= sw_d <= 3.0:
-                            print(f"\n  [ALERT] REVERSED WIRING DETECTED! Echo was received on GPIO {trigger_pin}!")
-                            print(f"          Current wires: Trigger=GPIO {trigger_pin}, Echo=GPIO {echo_pin}")
+                            print(f"\n  [ALERT] REVERSED WIRING DETECTED! Echo was received on GPIO {trigger_pin} ({sw_d*100:.1f} cm)!")
                             print(f"          Fix: Swap physical Pin 16 (GPIO 23) and Pin 18 (GPIO 24) on your breadboard!\n")
+                        # Re-open original pins
+                        sensor = Pi5UltrasonicSonar(
+                            trigger_pin=trigger_pin,
+                            echo_pin=echo_pin,
+                            max_distance=3.0,
+                            temp_c=temp_c,
+                            window_size=5,
+                            ping_interval=ping_interval,
+                            use_polling=use_polling,
+                        )
                     except Exception:
                         pass
 
                 if consecutive_timeouts >= 8:
-                    sys.stdout.write(f"\r  [WARN] No echo received! Check 5V/GND & Echo resistor divider.          \n")
+                    sys.stdout.write(f"\r  [WARN] Status={status_code} | No valid echo! Check 5V VCC, GND & 1k/2k divider.      \n")
                     sys.stdout.flush()
                     consecutive_timeouts = 0
                 else:
-                    sys.stdout.write(f"\r  [PINGING...] Waiting for acoustic echo reflection...                    \r")
+                    sys.stdout.write(f"\r  [PINGING...] Waiting for echo (Status: {status_code})...                          \r")
                     sys.stdout.flush()
 
-            elapsed = time.time() - t0
+            elapsed = time.perf_counter() - t0
             sleep_time = max(0.01, ping_interval - elapsed)
             time.sleep(sleep_time)
 
@@ -257,8 +271,9 @@ def main():
     parser = argparse.ArgumentParser(description="HC-SR04 Sonar Ultrasonic Hardware Diagnostic Suite")
     parser.add_argument("--trigger", type=int, default=PIN_TRIGGER_DEFAULT, help="Trigger GPIO pin (default: 23)")
     parser.add_argument("--echo", type=int, default=PIN_ECHO_DEFAULT, help="Echo GPIO pin (default: 24)")
-    parser.add_argument("--temp", type=float, default=22.0, help="Ambient temperature in Celsius (default: 22.0)")
+    parser.add_argument("--temp", type=float, default=25.0, help="Ambient temperature in Celsius (default: 25.0)")
     parser.add_argument("--rate", type=int, default=12, help="Sample rate in Hz (default: 12)")
+    parser.add_argument("--poll", action="store_true", help="Use direct lgpio polling mode instead of kernel IRQ timestamps")
     parser.add_argument("--port", type=str, default=None, help="Serial COM port for USB Sonar (e.g. COM3 or /dev/ttyUSB0)")
     parser.add_argument("--sim", action="store_true", help="Force simulated terminal acoustic radar mode")
     args = parser.parse_args()
@@ -284,13 +299,13 @@ def main():
         pass
 
     if is_raspberry_pi:
-        test_raspberry_pi_gpio(args.trigger, args.echo, temp_c=args.temp, sample_rate_hz=args.rate)
+        test_raspberry_pi_gpio(args.trigger, args.echo, temp_c=args.temp, sample_rate_hz=args.rate, use_polling=args.poll)
     else:
-        # Check if gpiozero is available anyway
+        # Check if lgpio or gpiozero is available anyway
         try:
-            import gpiozero
-            print("[INFO] 'gpiozero' detected. Attempting hardware GPIO test...")
-            test_raspberry_pi_gpio(args.trigger, args.echo, temp_c=args.temp, sample_rate_hz=args.rate)
+            import lgpio
+            print("[INFO] 'lgpio' detected. Attempting hardware GPIO test...")
+            test_raspberry_pi_gpio(args.trigger, args.echo, temp_c=args.temp, sample_rate_hz=args.rate, use_polling=args.poll)
         except Exception:
             print("[INFO] Running on non-Raspberry Pi workstation without hardware GPIO pins.")
             print("       Auto-launching Simulated Sonar Radar. To test USB hardware, pass --port COMx.\n")

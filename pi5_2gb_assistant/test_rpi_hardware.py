@@ -261,16 +261,21 @@ def test_gpio():
     print(f"  Testing HC-SR04 Ultrasonic Sensor (Trigger={PIN_TRIGGER}, Echo={PIN_ECHO})...")
     sensor = None
     try:
-        sensor = DistanceSensor(echo=PIN_ECHO, trigger=PIN_TRIGGER, max_distance=3.0, queue_len=3, partial=True)
-        # Give sensor 300ms to fire initial pings and populate internal queue
-        time.sleep(0.3)
-        dist = sensor.distance
+        from sonar_driver import Pi5UltrasonicSonar
+        sensor = Pi5UltrasonicSonar(trigger_pin=PIN_TRIGGER, echo_pin=PIN_ECHO, max_distance=3.0, temp_c=25.0)
+        print(f"  Sonar Hardware Backend   : {sensor.backend} ({sensor.chip_info})")
+        dist = None
+        for _ in range(5):
+            d = sensor.read_filtered()
+            if d is not None:
+                dist = d
+            time.sleep(0.07)
         if dist is not None and 0.02 <= dist <= 3.0:
             dist_str = f"{dist:.2f} meters ({dist * 100:.1f} cm)" if dist < 2.95 else "Clear (>3.0 meters / Open space)"
-            print(f"  Live Ultrasonic Distance : {dist_str}")
+            print(f"  Live Ultrasonic Distance : {dist_str} (Pulse: {int(sensor.last_pulse_us or 0)}µs)")
             print("  [PASS] HC-SR04 physical sensor verified & active.")
         else:
-            print("  [WARN] HC-SR04 returned no echo (Sensor Disconnected or Open Space).")
+            print(f"  [WARN] HC-SR04 returned no echo (Status: {sensor.last_status}).")
             print("         If connected, check VCC (5V), GND, Trigger (GPIO 23), Echo (GPIO 24).")
     except Exception as e:
         print(f"  [WARN] Ultrasonic sensor disconnected/error: {e}")
