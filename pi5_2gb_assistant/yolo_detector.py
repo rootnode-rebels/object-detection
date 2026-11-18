@@ -897,6 +897,8 @@ def format_spatial_announcement(detections, distance_meters=None, target_zone=No
     if distance_meters is not None and 0.02 <= distance_meters < 0.85:
         cm = int(round(distance_meters * 100))
         if cm <= 50:
+            if m_name:
+                return f"Stop! {m_name.capitalize()} directly ahead, at {cm} centimeters! Stop."
             return f"Stop! Close obstacle directly ahead, at {cm} centimeters! Stop."
         obs = m_name if m_name else "an obstacle"
         if not l_name and r_name:
@@ -947,7 +949,7 @@ def format_spatial_announcement(detections, distance_meters=None, target_zone=No
     elif not has_front and has_left and has_right:
         return f"There is {l_name} on your left and {r_name} on your right. Center corridor is open."
     else:
-        return f"Obstacles ahead on left and right. Path blocked, please stop."
+        return f"There is {m_name} directly ahead{dist_str}, {l_name} on your left, and {r_name} on your right. Path blocked, please stop."
 
 
 if __name__ == "__main__":

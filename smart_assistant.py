@@ -897,9 +897,11 @@ class AssistiveAlertManager:
         
         current_track_ids = {d.get("track_id") for d in detections if d.get("track_id") is not None}
         
-        # Update last seen timestamps for tracks in view
+        # ONLY refresh last-seen timestamps for tracks that were ALREADY announced!
+        # (Never pre-mark newly seen unannounced tracks as announced before they are spoken.)
         for tid in current_track_ids:
-            self.announced_tracks_seen[tid] = now
+            if tid in self.announced_tracks_seen:
+                self.announced_tracks_seen[tid] = now
             
         # Expire tracks that haven't been seen for > track_ttl (6 seconds grace period for head turns)
         expired = [tid for tid, seen_t in self.announced_tracks_seen.items() if now - seen_t > self.track_ttl]
@@ -971,6 +973,8 @@ class AssistiveAlertManager:
         if has_obstacles:
             self.clear_start_time = None
             current_sig = self._make_sig(detections, distance_meters=distance_meters)
+            # Stable candidate key based on object classes + obstacle presence (prevents minor sonar jitter resetting debounce)
+            candidate_key = tuple(sorted(d["class"] for d in detections)) + (sonar_obstacle_ahead,)
             
             # Find any unannounced tracks in view (respecting 6s TTL history!)
             unannounced = [d for d in detections if d.get("track_id") is not None and d.get("track_id") not in active_announced_tracks]
@@ -981,23 +985,23 @@ class AssistiveAlertManager:
                 return False, None, None
 
             # New obstacle detected or new state candidate:
-            if current_sig != self.candidate_sig:
-                self.candidate_sig = current_sig
+            if candidate_key != self.candidate_sig:
+                self.candidate_sig = candidate_key
                 self.candidate_first_seen = now
-                self.candidate_text = format_spatial_announcement(detections, distance_meters=distance_meters)
                 return False, None, None
             else:
-                # Candidate has been stable for change_debounce
+                # Candidate has been stable for change_debounce -> format fresh announcement with latest live distance
                 if now - self.candidate_first_seen >= self.change_debounce:
+                    fresh_text = format_spatial_announcement(detections, distance_meters=distance_meters)
                     self.last_spoken_time = now
                     self.last_spoken_sig = current_sig
-                    self.last_spoken_text = self.candidate_text
+                    self.last_spoken_text = fresh_text
                     self.candidate_sig = None
                     for tid in current_track_ids:
                         self.announced_tracks_seen[tid] = now
                     obs_name = detections[0]['class'] if detections else "obstacle"
                     obs_dir = detections[0].get('direction', 'ahead') if detections else "ahead"
-                    return True, self.candidate_text, f"New Obstacle Identified ({obs_name} {obs_dir})"
+                    return True, fresh_text, f"New Obstacle Identified ({obs_name} {obs_dir})"
                 return False, None, None
 
         # 6. Path is clear (len(detections) == 0 AND distance >= 1.8m or disconnected)
@@ -1172,7 +1176,7 @@ def main():
     startup_msg = "Smart vision assistant ready. Push button anytime for full scan."
     speak(startup_msg)
 
-    alert_manager = AssistiveAlertManager(change_debounce=1.8, clear_delay=3.0)
+    alert_manager = AssistiveAlertManager(change_debounce=0.6, clear_delay=2.0)
     last_button_time = 0.0
     last_valid_frame_time = time.time()
     camera_lost_alerted = False
